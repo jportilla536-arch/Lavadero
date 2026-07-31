@@ -93,6 +93,9 @@ function recordValue(value: unknown): FactusJson | null {
 }
 
 function validationMessage(error: FactusError): string {
+  if (error.status === 409) {
+    return 'Factus tiene una factura pendiente en esta cuenta. Espera a que la DIAN la procese antes de reintentar.';
+  }
   if (error.status !== 422) return 'Factus no pudo validar la factura electrónica';
   const details = recordValue(error.providerDetails);
   const data = recordValue(details?.data);
@@ -127,6 +130,20 @@ function numberingRanges(response: FactusJson) {
       resolutionNumber: typeof row.resolution_number === 'string' ? row.resolution_number : null,
       isActive: true,
     }));
+}
+
+function pendingBill(response: FactusJson) {
+  const page = factusData(response);
+  const rows = Array.isArray(page.data) ? page.data : [];
+  const pending = rows
+    .map(recordValue)
+    .find((row) => row?.is_validated === false);
+  if (!pending) return null;
+  return {
+    number: typeof pending.number === 'string' ? pending.number : null,
+    referenceCode:
+      typeof pending.reference_code === 'string' ? pending.reference_code : null,
+  };
 }
 
 async function loadInvoiceSource(orderId: string) {
@@ -233,6 +250,31 @@ electronicInvoicesRouter.post(
     if (invoice.status === 'VALIDATED') {
       res.json(camelize(invoice));
       return;
+    }
+
+    const providerPending = pendingBill(await factusClient.listInvoices({ page: 1 }));
+    if (providerPending) {
+      const sameReference = providerPending.referenceCode === source.order.number;
+      const message = sameReference
+        ? 'Esta factura todavía está pendiente de validación en Factus. Espera unos minutos antes de reintentar.'
+        : 'Factus tiene otra factura pendiente en esta cuenta. Espera a que la DIAN la procese antes de reintentar.';
+
+      await run(
+        sb()
+          .from('electronic_invoices')
+          .update({
+            status: 'FAILED',
+            error_payload: {
+              status: 409,
+              code: 'FACTUS_PENDING_BILL',
+              message,
+              pending_bill: providerPending,
+            },
+          })
+          .eq('id', invoice.id)
+          .in('status', ['PENDING', 'FAILED']),
+      );
+      throw HttpError.conflict(message);
     }
 
     const claimed = await run<InvoiceRow[]>(
