@@ -31,6 +31,9 @@ export interface InvoiceSource {
     sendEmail: boolean;
     taxId: string | null;
     taxRate: number;
+    defaultMunicipalityCode: string | null;
+    defaultLegalOrganizationCode: string;
+    defaultTributeCode: string;
   };
   items: Array<{ id: string; name: string; price: number; quantity: number }>;
   payments: Array<{ method: PaymentMethod; amount: number; reference: string | null }>;
@@ -129,9 +132,16 @@ export function buildFactusPayload(source: InvoiceSource): FactusPayload {
       address: required(customer.address, 'la dirección del cliente'),
       email: required(customer.email, 'el correo del cliente'),
       phone: required(customer.phone, 'el teléfono del cliente'),
-      legal_organization_code: required(customer.legalOrganizationCode, 'la organización legal del cliente'),
-      tribute_code: required(customer.tributeCode, 'el tributo del cliente'),
-      municipality_code: required(customer.municipalityCode, 'el municipio DANE del cliente'),
+      legal_organization_code:
+        customer.legalOrganizationCode ||
+        (customer.identificationDocumentCode === '31'
+          ? '1'
+          : business.defaultLegalOrganizationCode),
+      tribute_code: customer.tributeCode || business.defaultTributeCode,
+      municipality_code: required(
+        customer.municipalityCode || business.defaultMunicipalityCode,
+        'el municipio DANE predeterminado del negocio',
+      ),
     },
     items,
   };

@@ -44,6 +44,9 @@ interface BusinessRow {
   factus_send_email: boolean;
   factus_tax_id: string | null;
   factus_tax_rate: number;
+  factus_default_municipality_code: string | null;
+  factus_default_legal_organization_code: string;
+  factus_default_tribute_code: string;
 }
 interface ItemRow { id: string; name: string; price: number; quantity: number }
 interface PaymentRow { method: PaymentMethod; amount: number; reference: string | null }
@@ -127,6 +130,9 @@ async function loadInvoiceSource(orderId: string) {
       sendEmail: business.factus_send_email,
       taxId: business.factus_tax_id,
       taxRate: Number(business.factus_tax_rate),
+      defaultMunicipalityCode: business.factus_default_municipality_code,
+      defaultLegalOrganizationCode: business.factus_default_legal_organization_code,
+      defaultTributeCode: business.factus_default_tribute_code,
     },
     items,
     payments,

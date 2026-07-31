@@ -42,10 +42,10 @@ export function toHttpError(error: PostgrestError): HttpError {
   if (error.code === '23514') {
     return new HttpError(422, 'Un valor no cumple las validaciones');
   }
-  if (error.code === '42P01' || error.code === 'PGRST205') {
+  if (error.code === '42P01' || error.code === 'PGRST204' || error.code === 'PGRST205') {
     return new HttpError(
       500,
-      'Las tablas todavía no existen. Ejecuta las migraciones SQL: pnpm db:sql',
+      'Falta aplicar la facturación electrónica en Supabase. Ejecuta 20260730000005_electronic_invoicing.sql y 20260730000006_factus_business_defaults.sql en el SQL Editor.',
     );
   }
   if (error.code === 'PGRST202') {

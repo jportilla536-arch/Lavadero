@@ -25,6 +25,14 @@ const businessSchema = z.object({
   factusSendEmail: z.boolean().optional(),
   factusTaxId: z.string().trim().max(10).nullable().optional(),
   factusTaxRate: z.coerce.number().min(0).max(100).optional(),
+  factusDefaultMunicipalityCode: z
+    .string()
+    .trim()
+    .regex(/^\d{5}$/, 'Código DANE inválido')
+    .nullable()
+    .optional(),
+  factusDefaultLegalOrganizationCode: z.enum(['1', '2']).optional(),
+  factusDefaultTributeCode: z.string().trim().min(1).max(10).optional(),
 });
 
 type BusinessInput = z.output<typeof businessSchema>;
@@ -66,6 +74,15 @@ function toRow(input: Partial<BusinessInput>) {
   if (input.factusSendEmail !== undefined) row.factus_send_email = input.factusSendEmail;
   if (input.factusTaxId !== undefined) row.factus_tax_id = input.factusTaxId || null;
   if (input.factusTaxRate !== undefined) row.factus_tax_rate = input.factusTaxRate;
+  if (input.factusDefaultMunicipalityCode !== undefined) {
+    row.factus_default_municipality_code = input.factusDefaultMunicipalityCode || null;
+  }
+  if (input.factusDefaultLegalOrganizationCode !== undefined) {
+    row.factus_default_legal_organization_code = input.factusDefaultLegalOrganizationCode;
+  }
+  if (input.factusDefaultTributeCode !== undefined) {
+    row.factus_default_tribute_code = input.factusDefaultTributeCode;
+  }
   return row;
 }
 
