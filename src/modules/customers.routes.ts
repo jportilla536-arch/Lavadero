@@ -23,6 +23,12 @@ const customerInput = z.object({
   phone: z.string().trim().max(30).nullable().optional(),
   email: z.string().trim().email('Correo inválido').nullable().optional().or(z.literal('')),
   notes: z.string().trim().max(1000).nullable().optional(),
+  identificationDocumentCode: z.enum(['11', '12', '13', '22', '31', '41', '47']).nullable().optional(),
+  identification: z.string().trim().max(30).nullable().optional(),
+  address: z.string().trim().max(200).nullable().optional(),
+  municipalityCode: z.string().trim().regex(/^\d{5}$/, 'Código DANE inválido').nullable().optional(),
+  legalOrganizationCode: z.enum(['1', '2']).nullable().optional(),
+  tributeCode: z.string().trim().max(10).nullable().optional(),
   vehicles: z.array(vehicleInput).max(10).optional(),
 });
 
@@ -94,6 +100,12 @@ customersRouter.post(
         phone: body.phone || null,
         email: body.email || null,
         notes: body.notes || null,
+        identificationDocumentCode: body.identificationDocumentCode || null,
+        identification: body.identification || null,
+        address: body.address || null,
+        municipalityCode: body.municipalityCode || null,
+        legalOrganizationCode: body.legalOrganizationCode || null,
+        tributeCode: body.tributeCode || null,
         vehicles: (body.vehicles ?? []).map((vehicle) => ({
           plate: vehicle.plate,
           brand: vehicle.brand || null,
@@ -122,6 +134,16 @@ customersRouter.patch(
     if (body.phone !== undefined) patch.phone = body.phone || null;
     if (body.email !== undefined) patch.email = body.email || null;
     if (body.notes !== undefined) patch.notes = body.notes || null;
+    if (body.identificationDocumentCode !== undefined) {
+      patch.identification_document_code = body.identificationDocumentCode || null;
+    }
+    if (body.identification !== undefined) patch.identification = body.identification || null;
+    if (body.address !== undefined) patch.address = body.address || null;
+    if (body.municipalityCode !== undefined) patch.municipality_code = body.municipalityCode || null;
+    if (body.legalOrganizationCode !== undefined) {
+      patch.legal_organization_code = body.legalOrganizationCode || null;
+    }
+    if (body.tributeCode !== undefined) patch.tribute_code = body.tributeCode || null;
 
     if (Object.keys(patch).length === 0) throw HttpError.badRequest('No hay cambios que aplicar');
 

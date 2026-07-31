@@ -2,6 +2,7 @@ import type { ErrorRequestHandler, RequestHandler } from 'express';
 import { ZodError } from 'zod';
 import { MulterError } from 'multer';
 import { HttpError } from '../lib/http';
+import { FactusError } from '../integrations/factus/factus.client';
 import { env } from '../config/env';
 
 export const notFoundHandler: RequestHandler = (req, res) => {
@@ -17,6 +18,12 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
         message: issue.message,
       })),
     });
+    return;
+  }
+
+  if (err instanceof FactusError) {
+    const status = err.status >= 400 && err.status < 600 ? err.status : 502;
+    res.status(status).json({ error: err.message });
     return;
   }
 

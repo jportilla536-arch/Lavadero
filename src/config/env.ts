@@ -38,6 +38,16 @@ export const env = {
     adminEmail: process.env.SEED_ADMIN_EMAIL ?? 'admin@lavadero.com',
     adminPassword: process.env.SEED_ADMIN_PASSWORD ?? 'admin123',
   },
+
+  factus: {
+    enabled: process.env.FACTUS_ENABLED === 'true',
+    url: (process.env.FACTUS_URL ?? '').replace(/\/+$/, ''),
+    clientId: process.env.FACTUS_CLIENT_ID ?? '',
+    clientSecret: process.env.FACTUS_CLIENT_SECRET ?? '',
+    username: process.env.FACTUS_USERNAME ?? '',
+    password: process.env.FACTUS_PASSWORD ?? '',
+    timeoutMs: Math.max(Number(process.env.FACTUS_TIMEOUT_MS) || 15000, 1000),
+  },
 };
 
 if (!env.supabase.url || !env.supabase.serviceRoleKey) {

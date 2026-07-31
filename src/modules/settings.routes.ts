@@ -18,6 +18,13 @@ const businessSchema = z.object({
   ticketFooter: z.string().trim().max(200).nullable().optional(),
   ticketWidth: z.enum(['58mm', '80mm']).optional(),
   showQr: z.boolean().optional(),
+  factusEnabled: z.boolean().optional(),
+  factusNumberingRangeId: z.coerce.number().int().positive().nullable().optional(),
+  factusDocument: z.string().trim().min(2).max(4).optional(),
+  factusOperationType: z.string().trim().min(2).max(4).optional(),
+  factusSendEmail: z.boolean().optional(),
+  factusTaxId: z.string().trim().max(10).nullable().optional(),
+  factusTaxRate: z.coerce.number().min(0).max(100).optional(),
 });
 
 type BusinessInput = z.output<typeof businessSchema>;
@@ -50,6 +57,15 @@ function toRow(input: Partial<BusinessInput>) {
   if (input.ticketFooter !== undefined) row.ticket_footer = input.ticketFooter || null;
   if (input.ticketWidth !== undefined) row.ticket_width = input.ticketWidth;
   if (input.showQr !== undefined) row.show_qr = input.showQr;
+  if (input.factusEnabled !== undefined) row.factus_enabled = input.factusEnabled;
+  if (input.factusNumberingRangeId !== undefined) {
+    row.factus_numbering_range_id = input.factusNumberingRangeId;
+  }
+  if (input.factusDocument !== undefined) row.factus_document = input.factusDocument;
+  if (input.factusOperationType !== undefined) row.factus_operation_type = input.factusOperationType;
+  if (input.factusSendEmail !== undefined) row.factus_send_email = input.factusSendEmail;
+  if (input.factusTaxId !== undefined) row.factus_tax_id = input.factusTaxId || null;
+  if (input.factusTaxRate !== undefined) row.factus_tax_rate = input.factusTaxRate;
   return row;
 }
 
