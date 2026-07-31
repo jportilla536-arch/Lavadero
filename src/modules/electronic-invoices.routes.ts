@@ -59,6 +59,23 @@ interface InvoiceRow {
   number: string | null;
 }
 
+const PUBLIC_INVOICE_SELECT = [
+  'id',
+  'order_id',
+  'provider',
+  'reference_code',
+  'document',
+  'status',
+  'number',
+  'cufe',
+  'qr_url',
+  'attempt_count',
+  'last_attempt_at',
+  'validated_at',
+  'created_at',
+  'updated_at',
+].join(',');
+
 function factusData(response: FactusJson): FactusJson {
   const data = response.data;
   return data && typeof data === 'object' && !Array.isArray(data) ? (data as FactusJson) : {};
@@ -67,6 +84,49 @@ function factusData(response: FactusJson): FactusJson {
 function stringValue(record: FactusJson, key: string): string | null {
   const value = record[key];
   return typeof value === 'string' && value ? value : null;
+}
+
+function recordValue(value: unknown): FactusJson | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as FactusJson)
+    : null;
+}
+
+function validationMessage(error: FactusError): string {
+  if (error.status !== 422) return 'Factus no pudo validar la factura electrónica';
+  const details = recordValue(error.providerDetails);
+  const data = recordValue(details?.data);
+  const errors = recordValue(data?.errors);
+  const fields = Object.keys(errors ?? {});
+  const messages: string[] = [];
+  if (fields.includes('numbering_range_id')) messages.push('el rango de numeración no es válido');
+  if (fields.some((field) => field.endsWith('.discount_rate'))) {
+    messages.push('el porcentaje de descuento tiene un formato inválido');
+  }
+  if (fields.some((field) => field.startsWith('customer.'))) {
+    messages.push('los datos fiscales del cliente son inválidos');
+  }
+  return messages.length > 0
+    ? `Factus rechazó la factura: ${messages.join(' y ')}.`
+    : 'Factus rechazó la factura. Verifica el rango de numeración y los datos fiscales.';
+}
+
+function numberingRanges(response: FactusJson) {
+  const page = factusData(response);
+  const rows = Array.isArray(page.data) ? page.data : [];
+  return rows
+    .map(recordValue)
+    .filter((row): row is FactusJson => Boolean(row))
+    .filter((row) => row.is_active === true && String(row.document).includes('Factura'))
+    .map((row) => ({
+      id: Number(row.id),
+      document: String(row.document ?? ''),
+      prefix: String(row.prefix ?? ''),
+      from: typeof row.from === 'number' ? row.from : null,
+      to: typeof row.to === 'number' ? row.to : null,
+      resolutionNumber: typeof row.resolution_number === 'string' ? row.resolution_number : null,
+      isActive: true,
+    }));
 }
 
 async function loadInvoiceSource(orderId: string) {
@@ -230,10 +290,21 @@ electronicInvoicesRouter.post(
       );
       throw new HttpError(
         error instanceof FactusError ? error.status : 502,
-        'Factus no pudo validar la factura electrónica',
-        { invoiceId: invoice.id, providerStatus: error instanceof FactusError ? error.status : null },
+        error instanceof FactusError
+          ? validationMessage(error)
+          : 'Factus no pudo validar la factura electrónica',
+        { invoiceId: invoice.id, code: 'FACTUS_VALIDATION_FAILED' },
       );
     }
+  }),
+);
+
+/** GET /api/electronic-invoices/numbering-ranges · rangos activos de factura. */
+electronicInvoicesRouter.get(
+  '/numbering-ranges',
+  requireRole('ADMIN'),
+  asyncHandler(async (_req, res) => {
+    res.json(numberingRanges(await factusClient.listNumberingRanges()));
   }),
 );
 
@@ -248,7 +319,10 @@ electronicInvoicesRouter.get(
       }),
       req,
     );
-    let statement = sb().from('electronic_invoices').select('*').order('created_at', { ascending: false });
+    let statement = sb()
+      .from('electronic_invoices')
+      .select(PUBLIC_INVOICE_SELECT)
+      .order('created_at', { ascending: false });
     if (query.orderId) statement = statement.eq('order_id', query.orderId);
     if (query.status) statement = statement.eq('status', query.status);
     res.json(camelize(await run(statement.limit(100))));
@@ -286,7 +360,11 @@ electronicInvoicesRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {
     const invoice = await runOne<InvoiceRow>(
-      sb().from('electronic_invoices').select('*').eq('id', req.params.id).single(),
+      sb()
+        .from('electronic_invoices')
+        .select(PUBLIC_INVOICE_SELECT)
+        .eq('id', req.params.id)
+        .single(),
       'Factura electrónica no encontrada',
     );
     res.json(camelize(invoice));

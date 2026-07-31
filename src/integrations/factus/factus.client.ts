@@ -162,6 +162,10 @@ export class FactusClient {
     return this.authorized(`/v2/bills/show/${encodeURIComponent(number)}`, { method: 'GET' });
   }
 
+  listNumberingRanges(): Promise<FactusJson> {
+    return this.authorized('/v2/numbering-ranges', { method: 'GET' });
+  }
+
   listInvoices(filters: { identification?: string; number?: string; page?: number }) {
     const query = new URLSearchParams();
     if (filters.identification) query.set('identification', filters.identification);

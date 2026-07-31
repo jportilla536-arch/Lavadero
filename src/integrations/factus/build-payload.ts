@@ -69,7 +69,7 @@ export function buildFactusPayload(source: InvoiceSource): FactusPayload {
   if (discount < 0 || discount > order.subtotal) {
     throw new HttpError(422, 'Los descuentos de la orden no son válidos');
   }
-  const discountRate = ((discount / order.subtotal) * 100).toFixed(4);
+  const discountRate = ((discount / order.subtotal) * 100).toFixed(2);
   const taxes = business.taxId
     ? [{ tax_id: business.taxId, tax_rate: business.taxRate.toFixed(2) }]
     : [{ is_excluded: true as const }];
