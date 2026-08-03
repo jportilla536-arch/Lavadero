@@ -56,3 +56,30 @@ rangeReport('/cash', 'report_cash');
 // Estos dos devuelven un array: se envuelve en { data }
 rangeReport('/customers', 'report_customers', (data) => ({ data }));
 rangeReport('/employees', 'report_employees', (data) => ({ data }));
+
+/** GET /api/reports/employee/:employeeId/orders · órdenes de un empleado. */
+reportsRouter.get(
+  '/employee/:employeeId/orders',
+  asyncHandler(async (req, res) => {
+    const { info, args } = rangeOf(req);
+    const data = await rpc<unknown>('report_employee_orders', {
+      ...args,
+      p_employee_id: req.params.employeeId,
+    });
+    res.json({ range: info, data });
+  }),
+);
+
+/** GET /api/reports/customer/:customerId/orders · órdenes de un cliente. */
+reportsRouter.get(
+  '/customer/:customerId/orders',
+  asyncHandler(async (req, res) => {
+    const { info, args } = rangeOf(req);
+    const data = await rpc<unknown>('report_customer_orders', {
+      ...args,
+      p_customer_id: req.params.customerId,
+    });
+    res.json({ range: info, data });
+  }),
+);
+
