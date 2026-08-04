@@ -129,7 +129,7 @@ export function buildFactusPayload(source: InvoiceSource): FactusPayload {
       identification_document_code: required(customer.identificationDocumentCode, 'el tipo de documento del cliente'),
       identification: required(customer.identification, 'el documento del cliente'),
       names: `${customer.firstName} ${customer.lastName}`.trim(),
-      address: required(customer.address, 'la dirección del cliente'),
+      address: customer.address?.trim() || 'No especificada',
       email: required(customer.email, 'el correo del cliente'),
       phone: required(customer.phone, 'el teléfono del cliente'),
       legal_organization_code:
