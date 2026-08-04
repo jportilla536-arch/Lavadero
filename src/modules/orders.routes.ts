@@ -306,6 +306,7 @@ ordersRouter.post(
         discountType: z.enum(DISCOUNT_TYPES).optional(),
         discountValue: z.coerce.number().int().min(0).optional(),
         promotionId: z.string().uuid().nullable().optional(),
+        requiresInvoice: z.boolean().default(false),
         payments: z
           .array(
             z.object({
@@ -330,6 +331,7 @@ ordersRouter.post(
 
     const payload: Record<string, unknown> = {
       tip: body.tip,
+      requiresInvoice: body.requiresInvoice,
       payments: body.payments,
       finalEvidences: body.finalEvidences ?? [],
     };
