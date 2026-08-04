@@ -1,4 +1,4 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import { z } from 'zod';
 import { camelize } from '../lib/case';
 import { resolveRange } from '../lib/dates';
@@ -94,12 +94,17 @@ ordersRouter.get(
 
     const range = filters.preset === 'all' ? null : resolveRange(filters);
 
+    let employeeId = filters.employeeId;
+    if (req.user?.role === 'OPERATOR') {
+      employeeId = req.user.employeeId ?? undefined;
+    }
+
     const result = await rpc<OrdersPage>('search_orders', {
       p_statuses: statuses.length > 0 ? statuses : null,
       p_from: range ? range.from.toISOString() : null,
       p_to: range ? range.to.toISOString() : null,
       p_query: filters.q || null,
-      p_employee: filters.employeeId ?? null,
+      p_employee: employeeId ?? null,
       p_limit: filters.pageSize,
       p_offset: (filters.page - 1) * filters.pageSize,
     });
@@ -117,9 +122,15 @@ ordersRouter.get(
 /** GET /api/orders/board · órdenes activas agrupadas por estado */
 ordersRouter.get(
   '/board',
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    let employeeId: string | null = null;
+    if (req.user?.role === 'OPERATOR') {
+      employeeId = req.user.employeeId ?? null;
+    }
+
     const result = await rpc<OrdersPage>('search_orders', {
       p_statuses: ['PENDING', 'IN_PROGRESS', 'READY'],
+      p_employee: employeeId,
       p_limit: 200,
       p_offset: 0,
     });

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { camelize } from '../lib/case';
 import { asyncHandler, HttpError } from '../lib/http';
@@ -7,6 +8,11 @@ import { requireAuth, requireRole } from '../middleware/auth';
 import { parseBody } from '../middleware/validate';
 import { EMPLOYEE_STATUSES } from '../types';
 
+const userAccountSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Correo inválido'),
+  password: z.string().min(6, 'Mínimo 6 caracteres'),
+});
+
 const employeeSchema = z.object({
   name: z.string().trim().min(2, 'Nombre requerido').max(80),
   position: z.string().trim().max(60).default('Lavador'),
@@ -14,6 +20,7 @@ const employeeSchema = z.object({
   status: z.enum(EMPLOYEE_STATUSES).default('ACTIVE'),
   hiredAt: z.string().date().nullable().optional(),
   userId: z.string().uuid().nullable().optional(),
+  userAccount: userAccountSchema.nullable().optional(),
 });
 
 type EmployeeInput = z.output<typeof employeeSchema>;
@@ -72,7 +79,35 @@ employeesRouter.post(
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const body = parseBody(employeeSchema, req);
-    const created = await run<unknown[]>(sb().from('employees').insert(toRow(body)).select('*'));
+    let createdUserId = body.userId || null;
+
+    if (body.userAccount) {
+      const existing = await run<{ id: string }[]>(
+        sb().from('users').select('id').eq('email', body.userAccount.email).limit(1),
+      );
+      if (existing[0]) {
+        throw HttpError.conflict('Ya existe un usuario con ese correo electrónico');
+      }
+
+      const passwordHash = await bcrypt.hash(body.userAccount.password, 10);
+      const createdUser = await run<{ id: string }[]>(
+        sb()
+          .from('users')
+          .insert({
+            name: body.name,
+            email: body.userAccount.email,
+            password_hash: passwordHash,
+            role: 'OPERATOR',
+          })
+          .select('id'),
+      );
+      createdUserId = createdUser[0].id;
+    }
+
+    const row = toRow(body);
+    row.user_id = createdUserId;
+
+    const created = await run<unknown[]>(sb().from('employees').insert(row).select('*'));
     res.status(201).json(camelize(created[0]));
   }),
 );
@@ -84,13 +119,63 @@ employeesRouter.patch(
   asyncHandler(async (req, res) => {
     const body = parseBody(employeeSchema.partial(), req);
     const patch = toRow(body);
-    if (Object.keys(patch).length === 0) throw HttpError.badRequest('No hay cambios que aplicar');
 
-    const updated = await run<unknown[]>(
-      sb().from('employees').update(patch).eq('id', req.params.id).select('*'),
+    const currentEmployees = await run<{ id: string; user_id: string | null }[]>(
+      sb().from('employees').select('id, user_id').eq('id', req.params.id).limit(1),
     );
-    if (!updated[0]) throw HttpError.notFound('Empleado no encontrado');
-    res.json(camelize(updated[0]));
+    const currentEmployee = currentEmployees[0];
+    if (!currentEmployee) throw HttpError.notFound('Empleado no encontrado');
+
+    if (body.userAccount) {
+      const passwordHash = await bcrypt.hash(body.userAccount.password, 10);
+      if (currentEmployee.user_id) {
+        await run(
+          sb()
+            .from('users')
+            .update({
+              email: body.userAccount.email,
+              password_hash: passwordHash,
+            })
+            .eq('id', currentEmployee.user_id),
+        );
+      } else {
+        const existing = await run<{ id: string }[]>(
+          sb().from('users').select('id').eq('email', body.userAccount.email).limit(1),
+        );
+        if (existing[0]) {
+          throw HttpError.conflict('Ya existe un usuario con ese correo electrónico');
+        }
+
+        const createdUser = await run<{ id: string }[]>(
+          sb()
+            .from('users')
+            .insert({
+              name: body.name ?? 'Empleado',
+              email: body.userAccount.email,
+              password_hash: passwordHash,
+              role: 'OPERATOR',
+            })
+            .select('id'),
+        );
+        patch.user_id = createdUser[0].id;
+      }
+    }
+
+    if (Object.keys(patch).length === 0 && !body.userAccount) {
+      throw HttpError.badRequest('No hay cambios que aplicar');
+    }
+
+    if (Object.keys(patch).length > 0) {
+      const updated = await run<unknown[]>(
+        sb().from('employees').update(patch).eq('id', req.params.id).select('*'),
+      );
+      if (!updated[0]) throw HttpError.notFound('Empleado no encontrado');
+      res.json(camelize(updated[0]));
+      return;
+    }
+
+    const updated = await rpc<unknown>('employee_detail', { p_id: req.params.id });
+    res.json(updated);
   }),
 );
 

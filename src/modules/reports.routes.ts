@@ -42,8 +42,50 @@ const rangeReport = (path: string, fn: string, wrap?: (data: unknown) => object)
 /** GET /api/reports/dashboard */
 reportsRouter.get(
   '/dashboard',
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    if (req.user?.role === 'OPERATOR' && req.user.employeeId) {
+      res.json(
+        await rpc('report_dashboard_employee', { p_employee_id: req.user.employeeId }),
+      );
+      return;
+    }
     res.json(await rpc('report_dashboard'));
+  }),
+);
+
+/** GET /api/reports/employee-earnings · ganancias y comisiones (50%) de un empleado */
+reportsRouter.get(
+  '/employee-earnings',
+  asyncHandler(async (req, res) => {
+    const { info, args } = rangeOf(req);
+    const employeeId =
+      req.user?.role === 'OPERATOR'
+        ? req.user.employeeId
+        : (req.query.employeeId as string | undefined);
+
+    if (!employeeId) {
+      res.json({
+        range: info,
+        summary: {
+          ordersCount: 0,
+          servicesCount: 0,
+          servicesTotal: 0,
+          commissionTotal: 0,
+          companyTotal: 0,
+          tipsTotal: 0,
+          payoutTotal: 0,
+        },
+        items: [],
+      });
+      return;
+    }
+
+    const data = await rpc<Record<string, unknown>>('report_employee_earnings', {
+      ...args,
+      p_employee_id: employeeId,
+    });
+
+    res.json({ range: info, ...data });
   }),
 );
 

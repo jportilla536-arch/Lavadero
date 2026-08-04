@@ -144,6 +144,7 @@ authRouter.post(
         email: z.string().trim().toLowerCase().email(),
         password: z.string().min(6, 'Mínimo 6 caracteres'),
         role: z.enum(USER_ROLES).default('CASHIER'),
+        employeeId: z.string().uuid().nullable().optional(),
       }),
       req,
     );
@@ -164,7 +165,15 @@ authRouter.post(
         .select(SELECT),
     );
 
-    res.status(201).json(toPublic(created[0]));
+    const user = created[0];
+    if (body.employeeId) {
+      await run(
+        sb().from('employees').update({ user_id: user.id }).eq('id', body.employeeId),
+      );
+    }
+
+    const freshUser = (await findByEmail(user.email)) ?? user;
+    res.status(201).json(toPublic(freshUser));
   }),
 );
 
@@ -180,6 +189,7 @@ authRouter.patch(
         role: z.enum(USER_ROLES).optional(),
         active: z.boolean().optional(),
         password: z.string().min(6).optional(),
+        employeeId: z.string().uuid().nullable().optional(),
       }),
       req,
     );
@@ -190,13 +200,34 @@ authRouter.patch(
     if (body.active !== undefined) patch.active = body.active;
     if (body.password !== undefined) patch.password_hash = await bcrypt.hash(body.password, 10);
 
-    if (Object.keys(patch).length === 0) throw HttpError.badRequest('No hay cambios que aplicar');
+    if (Object.keys(patch).length === 0 && body.employeeId === undefined) {
+      throw HttpError.badRequest('No hay cambios que aplicar');
+    }
 
-    const updated = await run<UserRow[]>(
-      sb().from('users').update(patch).eq('id', req.params.id).select(SELECT),
+    if (Object.keys(patch).length > 0) {
+      const updated = await run<UserRow[]>(
+        sb().from('users').update(patch).eq('id', req.params.id).select(SELECT),
+      );
+      if (!updated[0]) throw HttpError.notFound('Usuario no encontrado');
+    }
+
+    if (body.employeeId !== undefined) {
+      if (body.employeeId) {
+        await run(
+          sb().from('employees').update({ user_id: req.params.id }).eq('id', body.employeeId),
+        );
+      } else {
+        await run(
+          sb().from('employees').update({ user_id: null }).eq('user_id', req.params.id),
+        );
+      }
+    }
+
+    const rows = await run<UserRow[]>(
+      sb().from('users').select(SELECT).eq('id', req.params.id).limit(1),
     );
-    if (!updated[0]) throw HttpError.notFound('Usuario no encontrado');
+    if (!rows[0]) throw HttpError.notFound('Usuario no encontrado');
 
-    res.json(toPublic(updated[0]));
+    res.json(toPublic(rows[0]));
   }),
 );
