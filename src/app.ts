@@ -13,7 +13,25 @@ export function createApp() {
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(
     cors({
-      origin: env.corsOrigin.length > 0 ? env.corsOrigin : true,
+      origin: (origin, callback) => {
+        // Permitir solicitudes sin origin (como curl, mobile o postman)
+        if (!origin) return callback(null, true);
+
+        // Permitir orígenes explícitos configurados en CORS_ORIGIN
+        if (env.corsOrigin.includes(origin)) return callback(null, true);
+
+        // Permitir cualquier localhost o 127.0.0.1 en cualquier puerto
+        if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+          return callback(null, true);
+        }
+
+        // Permitir despliegues en Vercel
+        if (/^https:\/\/.*\.vercel\.app$/.test(origin)) {
+          return callback(null, true);
+        }
+
+        callback(null, false);
+      },
       credentials: true,
     }),
   );
