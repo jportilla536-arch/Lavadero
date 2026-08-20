@@ -1,9 +1,9 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import { z } from 'zod';
 import { camelize } from '../lib/case';
 import { asyncHandler, HttpError } from '../lib/http';
 import { run, sb } from '../lib/supabase';
-import { requireAuth, requireRole } from '../middleware/auth';
+import { getTenantId, requireAuth, requireRole } from '../middleware/auth';
 import { parseBody } from '../middleware/validate';
 
 const serviceSchema = z.object({
@@ -20,8 +20,9 @@ const serviceSchema = z.object({
 type ServiceInput = z.output<typeof serviceSchema>;
 
 /** Convierte el payload de la API a columnas de la tabla. */
-function toRow(input: Partial<ServiceInput>) {
+function toRow(input: Partial<ServiceInput>, businessId?: string | null) {
   const row: Record<string, unknown> = {};
+  if (businessId !== undefined && businessId !== null) row.business_id = businessId;
   if (input.name !== undefined) row.name = input.name;
   if (input.description !== undefined) row.description = input.description || null;
   if (input.price !== undefined) row.price = input.price;
@@ -41,12 +42,14 @@ servicesRouter.use(requireAuth);
 servicesRouter.get(
   '/',
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     let query = sb()
       .from('services')
       .select('*')
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true });
 
+    if (businessId) query = query.eq('business_id', businessId);
     if (req.query.onlyActive !== 'false') query = query.eq('active', true);
 
     res.json(camelize(await run(query)));
@@ -56,10 +59,13 @@ servicesRouter.get(
 /** POST /api/services */
 servicesRouter.post(
   '/',
-  requireRole('ADMIN'),
+  requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     const body = parseBody(serviceSchema, req);
-    const created = await run<unknown[]>(sb().from('services').insert(toRow(body)).select('*'));
+    const created = await run<unknown[]>(
+      sb().from('services').insert(toRow(body, businessId)).select('*'),
+    );
     res.status(201).json(camelize(created[0]));
   }),
 );
@@ -67,15 +73,19 @@ servicesRouter.post(
 /** PATCH /api/services/:id */
 servicesRouter.patch(
   '/:id',
-  requireRole('ADMIN'),
+  requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     const body = parseBody(serviceSchema.partial(), req);
     const patch = toRow(body);
     if (Object.keys(patch).length === 0) throw HttpError.badRequest('No hay cambios que aplicar');
 
-    const updated = await run<unknown[]>(
-      sb().from('services').update(patch).eq('id', req.params.id).select('*'),
-    );
+    let query = sb().from('services').update(patch).eq('id', req.params.id);
+    if (businessId && req.user?.role !== 'SUPER_ADMIN') {
+      query = query.eq('business_id', businessId);
+    }
+
+    const updated = await run<unknown[]>(query.select('*'));
     if (!updated[0]) throw HttpError.notFound('Servicio no encontrado');
     res.json(camelize(updated[0]));
   }),
@@ -87,25 +97,30 @@ servicesRouter.patch(
  */
 servicesRouter.delete(
   '/:id',
-  requireRole('ADMIN'),
+  requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     const { count } = await sb()
       .from('order_items')
       .select('id', { count: 'exact', head: true })
       .eq('service_id', req.params.id);
 
     if ((count ?? 0) > 0) {
-      const archived = await run<unknown[]>(
-        sb().from('services').update({ active: false }).eq('id', req.params.id).select('*'),
-      );
+      let query = sb().from('services').update({ active: false }).eq('id', req.params.id);
+      if (businessId && req.user?.role !== 'SUPER_ADMIN') {
+        query = query.eq('business_id', businessId);
+      }
+      const archived = await run<unknown[]>(query.select('*'));
       if (!archived[0]) throw HttpError.notFound('Servicio no encontrado');
       res.json({ archived: true, service: camelize(archived[0]) });
       return;
     }
 
-    const deleted = await run<unknown[]>(
-      sb().from('services').delete().eq('id', req.params.id).select('id'),
-    );
+    let delQuery = sb().from('services').delete().eq('id', req.params.id);
+    if (businessId && req.user?.role !== 'SUPER_ADMIN') {
+      delQuery = delQuery.eq('business_id', businessId);
+    }
+    const deleted = await run<unknown[]>(delQuery.select('id'));
     if (!deleted[0]) throw HttpError.notFound('Servicio no encontrado');
     res.status(204).send();
   }),

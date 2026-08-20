@@ -19,6 +19,7 @@ export interface JwtPayload {
   email: string;
   role: UserRole;
   employeeId: string | null;
+  businessId: string | null;
 }
 
 export function signToken(payload: JwtPayload): string {
@@ -46,11 +47,33 @@ export const requireAuth: RequestHandler = (req, _res, next) => {
       email: payload.email,
       role: payload.role,
       employeeId: payload.employeeId ?? null,
+      businessId: payload.businessId ?? null,
     };
     next();
   } catch {
     next(HttpError.unauthorized('Token inválido o expirado'));
   }
+};
+
+/** Obtiene el business_id para la petición actual (del usuario o header para SUPER_ADMIN) */
+export function getTenantId(req: Request): string | null {
+  if (req.user?.businessId) return req.user.businessId;
+  if (req.user?.role === 'SUPER_ADMIN') {
+    const headerBusinessId = req.headers['x-business-id'];
+    if (typeof headerBusinessId === 'string' && headerBusinessId) {
+      return headerBusinessId;
+    }
+  }
+  return null;
+}
+
+/** Exige que la petición tenga un business_id válido para operar sobre un lavadero. */
+export const requireTenant: RequestHandler = (req, _res, next) => {
+  const businessId = getTenantId(req);
+  if (!businessId) {
+    return next(HttpError.badRequest('No se especificó un establecimiento válido'));
+  }
+  next();
 };
 
 /** Exige que el usuario tenga uno de los roles indicados. */
@@ -63,3 +86,4 @@ export const requireRole =
     }
     next();
   };
+

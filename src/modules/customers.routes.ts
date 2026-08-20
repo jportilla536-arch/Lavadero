@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { camelize } from '../lib/case';
 import { asyncHandler, HttpError } from '../lib/http';
 import { rpc, run, sb } from '../lib/supabase';
-import { requireAuth } from '../middleware/auth';
+import { getTenantId, requireAuth } from '../middleware/auth';
 import { parseBody, parseQuery } from '../middleware/validate';
 import { VEHICLE_TYPES } from '../types';
 
@@ -32,11 +32,6 @@ const customerInput = z.object({
   vehicles: z.array(vehicleInput).max(10).optional(),
 });
 
-interface CustomerPage {
-  data: unknown[];
-  total: number;
-}
-
 export const customersRouter = Router();
 
 customersRouter.use(requireAuth);
@@ -45,6 +40,7 @@ customersRouter.use(requireAuth);
 customersRouter.get(
   '/',
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     const { q, page, pageSize } = parseQuery(
       z.object({
         q: z.string().trim().optional(),
@@ -54,13 +50,28 @@ customersRouter.get(
       req,
     );
 
-    const result = await rpc<CustomerPage>('search_customers', {
-      p_query: q ?? null,
-      p_limit: pageSize,
-      p_offset: (page - 1) * pageSize,
-    });
+    let query = sb()
+      .from('customers')
+      .select('*, vehicles(*)', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1);
 
-    res.json({ data: result.data, page, pageSize, total: result.total });
+    if (businessId) query = query.eq('business_id', businessId);
+    if (q) {
+      query = query.or(
+        `first_name.ilike.%${q}%,last_name.ilike.%${q}%,phone.ilike.%${q}%,identification.ilike.%${q}%`,
+      );
+    }
+
+    const { data, count, error } = await query;
+    if (error) throw error;
+
+    res.json({
+      data: camelize(data || []),
+      page,
+      pageSize,
+      total: count || 0,
+    });
   }),
 );
 
@@ -68,12 +79,24 @@ customersRouter.get(
 customersRouter.get(
   '/search',
   asyncHandler(async (req, res) => {
-    const result = await rpc<CustomerPage>('search_customers', {
-      p_query: (req.query.q as string | undefined)?.trim() || null,
-      p_limit: 15,
-      p_offset: 0,
-    });
-    res.json(result.data);
+    const businessId = getTenantId(req);
+    const term = (req.query.q as string | undefined)?.trim();
+
+    let query = sb()
+      .from('customers')
+      .select('*, vehicles(*)')
+      .order('created_at', { ascending: false })
+      .limit(15);
+
+    if (businessId) query = query.eq('business_id', businessId);
+    if (term) {
+      query = query.or(
+        `first_name.ilike.%${term}%,last_name.ilike.%${term}%,phone.ilike.%${term}%,identification.ilike.%${term}%`,
+      );
+    }
+
+    const rows = await run<any[]>(query);
+    res.json(camelize(rows));
   }),
 );
 
@@ -81,9 +104,20 @@ customersRouter.get(
 customersRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {
-    const customer = await rpc<unknown>('customer_detail', { p_id: req.params.id });
-    if (!customer) throw HttpError.notFound('Cliente no encontrado');
-    res.json(customer);
+    const businessId = getTenantId(req);
+    let query = sb()
+      .from('customers')
+      .select('*, vehicles(*), orders(*)')
+      .eq('id', req.params.id)
+      .limit(1);
+
+    if (businessId && req.user?.role !== 'SUPER_ADMIN') {
+      query = query.eq('business_id', businessId);
+    }
+
+    const rows = await run<any[]>(query);
+    if (!rows[0]) throw HttpError.notFound('Cliente no encontrado');
+    res.json(camelize(rows[0]));
   }),
 );
 
@@ -91,34 +125,49 @@ customersRouter.get(
 customersRouter.post(
   '/',
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     const body = parseBody(customerInput, req);
 
-    const created = await rpc<unknown>('create_customer', {
-      payload: {
-        firstName: body.firstName,
-        lastName: body.lastName,
-        phone: body.phone || null,
-        email: body.email || null,
-        notes: body.notes || null,
-        identificationDocumentCode: body.identificationDocumentCode || null,
-        identification: body.identification || null,
-        address: body.address || null,
-        municipalityCode: body.municipalityCode || null,
-        legalOrganizationCode: body.legalOrganizationCode || null,
-        tributeCode: body.tributeCode || null,
-        vehicles: (body.vehicles ?? []).map((vehicle) => ({
-          plate: vehicle.plate,
-          brand: vehicle.brand || null,
-          model: vehicle.model || null,
-          color: vehicle.color || null,
-          type: vehicle.type,
-          photoUrl: vehicle.photoUrl || null,
-          notes: vehicle.notes || null,
-        })),
-      },
-    });
+    const customerRow = {
+      first_name: body.firstName,
+      last_name: body.lastName,
+      phone: body.phone || null,
+      email: body.email || null,
+      notes: body.notes || null,
+      identification_document_code: body.identificationDocumentCode || null,
+      identification: body.identification || null,
+      address: body.address || null,
+      municipality_code: body.municipalityCode || null,
+      legal_organization_code: body.legalOrganizationCode || null,
+      tribute_code: body.tributeCode || null,
+      business_id: businessId,
+    };
 
-    res.status(201).json(created);
+    const createdCustomers = await run<any[]>(
+      sb().from('customers').insert(customerRow).select('*'),
+    );
+    const createdCustomer = createdCustomers[0];
+
+    const vehiclesToInsert = (body.vehicles ?? []).map((vehicle) => ({
+      customer_id: createdCustomer.id,
+      plate: vehicle.plate,
+      brand: vehicle.brand || null,
+      model: vehicle.model || null,
+      color: vehicle.color || null,
+      type: vehicle.type,
+      photo_url: vehicle.photoUrl || null,
+      notes: vehicle.notes || null,
+    }));
+
+    let insertedVehicles: any[] = [];
+    if (vehiclesToInsert.length > 0) {
+      insertedVehicles = await run<any[]>(
+        sb().from('vehicles').insert(vehiclesToInsert).select('*'),
+      );
+    }
+
+    createdCustomer.vehicles = insertedVehicles;
+    res.status(201).json(camelize(createdCustomer));
   }),
 );
 
@@ -126,6 +175,7 @@ customersRouter.post(
 customersRouter.patch(
   '/:id',
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     const body = parseBody(customerInput.partial().omit({ vehicles: true }), req);
 
     const patch: Record<string, unknown> = {};
@@ -147,12 +197,18 @@ customersRouter.patch(
 
     if (Object.keys(patch).length === 0) throw HttpError.badRequest('No hay cambios que aplicar');
 
-    const updated = await run<unknown[]>(
-      sb().from('customers').update(patch).eq('id', req.params.id).select('id'),
-    );
+    let query = sb().from('customers').update(patch).eq('id', req.params.id);
+    if (businessId && req.user?.role !== 'SUPER_ADMIN') {
+      query = query.eq('business_id', businessId);
+    }
+
+    const updated = await run<unknown[]>(query.select('id'));
     if (!updated[0]) throw HttpError.notFound('Cliente no encontrado');
 
-    res.json(await rpc('customer_detail', { p_id: req.params.id }));
+    const freshRows = await run<any[]>(
+      sb().from('customers').select('*, vehicles(*)').eq('id', req.params.id).limit(1),
+    );
+    res.json(camelize(freshRows[0]));
   }),
 );
 
@@ -166,20 +222,23 @@ const forceQuery = z.object({
 
 /**
  * DELETE /api/customers/:id
- *
- * Sin `force` se bloquea si el cliente tiene órdenes (protege el histórico).
- * Con `force=true` se eliminan primero sus órdenes: items, pagos, evidencias y
- * eventos caen por cascada, así que esas ventas desaparecen de los reportes.
  */
 customersRouter.delete(
   '/:id',
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     const { force } = parseQuery(forceQuery, req);
 
-    const { count } = await sb()
+    let countQuery = sb()
       .from('orders')
       .select('id', { count: 'exact', head: true })
       .eq('customer_id', req.params.id);
+
+    if (businessId && req.user?.role !== 'SUPER_ADMIN') {
+      countQuery = countQuery.eq('business_id', businessId);
+    }
+
+    const { count } = await countQuery;
 
     if ((count ?? 0) > 0) {
       if (!force) {
@@ -187,14 +246,15 @@ customersRouter.delete(
           'No se puede eliminar: el cliente tiene órdenes registradas. Reintenta con force=true para eliminarlas también.',
         );
       }
-      // Las tablas hijas de orders (items, pagos, evidencias, eventos) tienen
-      // on delete cascade, por lo que basta con borrar las órdenes.
       await run(sb().from('orders').delete().eq('customer_id', req.params.id).select('id'));
     }
 
-    const deleted = await run<unknown[]>(
-      sb().from('customers').delete().eq('id', req.params.id).select('id'),
-    );
+    let delQuery = sb().from('customers').delete().eq('id', req.params.id);
+    if (businessId && req.user?.role !== 'SUPER_ADMIN') {
+      delQuery = delQuery.eq('business_id', businessId);
+    }
+
+    const deleted = await run<unknown[]>(delQuery.select('id'));
     if (!deleted[0]) throw HttpError.notFound('Cliente no encontrado');
     res.status(204).send();
   }),
@@ -224,11 +284,14 @@ function vehicleToRow(input: Partial<z.output<typeof vehicleWithOwner>>) {
 vehiclesRouter.get(
   '/',
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     let query = sb()
       .from('vehicles')
-      .select('*, customer:customers(id, first_name, last_name, phone)')
+      .select('*, customer:customers!inner(id, first_name, last_name, phone, business_id)')
       .order('created_at', { ascending: false })
       .limit(100);
+
+    if (businessId) query = query.eq('customer.business_id', businessId);
 
     const customerId = req.query.customerId as string | undefined;
     const term = (req.query.q as string | undefined)?.trim();

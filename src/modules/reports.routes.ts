@@ -2,7 +2,7 @@ import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/http';
 import { rpc } from '../lib/supabase';
-import { requireAuth } from '../middleware/auth';
+import { getTenantId, requireAuth } from '../middleware/auth';
 import { parseQuery } from '../middleware/validate';
 import { resolveRange } from '../lib/dates';
 
@@ -19,9 +19,14 @@ const rangeSchema = z.object({
 /** Rango resuelto + argumentos listos para las funciones SQL. */
 function rangeOf(req: Request) {
   const range = resolveRange(parseQuery(rangeSchema, req));
+  const businessId = getTenantId(req);
   return {
     info: { from: range.from, to: range.to, preset: range.preset },
-    args: { p_from: range.from.toISOString(), p_to: range.to.toISOString() },
+    args: {
+      p_from: range.from.toISOString(),
+      p_to: range.to.toISOString(),
+      p_business_id: businessId,
+    },
   };
 }
 
@@ -43,13 +48,14 @@ const rangeReport = (path: string, fn: string, wrap?: (data: unknown) => object)
 reportsRouter.get(
   '/dashboard',
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     if (req.user?.role === 'OPERATOR' && req.user.employeeId) {
       res.json(
         await rpc('report_dashboard_employee', { p_employee_id: req.user.employeeId }),
       );
       return;
     }
-    res.json(await rpc('report_dashboard'));
+    res.json(await rpc('report_dashboard', { p_business_id: businessId }));
   }),
 );
 
@@ -124,4 +130,3 @@ reportsRouter.get(
     res.json({ range: info, data });
   }),
 );
-

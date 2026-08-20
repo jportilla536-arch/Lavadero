@@ -4,8 +4,9 @@ import { camelize } from '../lib/case';
 import { resolveRange } from '../lib/dates';
 import { asyncHandler, HttpError } from '../lib/http';
 import { rpc, run, sb } from '../lib/supabase';
-import { requireAuth } from '../middleware/auth';
+import { getTenantId, requireAuth } from '../middleware/auth';
 import { parseBody, parseQuery } from '../middleware/validate';
+
 import {
   DAMAGE_TYPES,
   DISCOUNT_TYPES,
@@ -163,9 +164,10 @@ ordersRouter.get(
 ordersRouter.post(
   '/',
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     const body = parseBody(createOrderInput, req);
 
-    const order = await rpc<unknown>('create_order', {
+    const order = await rpc<any>('create_order', {
       payload: {
         customerId: body.customerId,
         vehicleId: body.vehicleId,
@@ -179,6 +181,11 @@ ordersRouter.post(
       },
       p_user: actor(req.user?.name),
     });
+
+    if (businessId && order && order.id) {
+      await run(sb().from('orders').update({ business_id: businessId }).eq('id', order.id));
+      order.businessId = businessId;
+    }
 
     res.status(201).json(order);
   }),

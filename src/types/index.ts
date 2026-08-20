@@ -2,7 +2,7 @@
 //  Tipos y enums compartidos (equivalentes a los ENUM de PostgreSQL)
 // =====================================================================
 
-export const USER_ROLES = ['ADMIN', 'CASHIER', 'OPERATOR'] as const;
+export const USER_ROLES = ['SUPER_ADMIN', 'ADMIN', 'CASHIER', 'OPERATOR'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
 export const VEHICLE_TYPES = ['CAR', 'PICKUP', 'MOTORCYCLE', 'TRUCK'] as const;
@@ -63,4 +63,5 @@ export interface AuthUser {
   email: string;
   role: UserRole;
   employeeId: string | null;
+  businessId: string | null;
 }

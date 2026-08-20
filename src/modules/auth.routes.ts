@@ -15,22 +15,31 @@ interface UserRow {
   role: UserRole;
   active: boolean;
   avatar_url: string | null;
+  business_id: string | null;
+  businesses?: { id: string; name: string; active: boolean }[] | { id: string; name: string; active: boolean } | null;
   employees: { id: string }[] | null;
 }
 
-const SELECT = 'id, name, email, password_hash, role, active, avatar_url, employees(id)';
+const SELECT = 'id, name, email, password_hash, role, active, avatar_url, business_id, businesses(id, name, active), employees(id)';
 
 const employeeIdOf = (row: UserRow) => row.employees?.[0]?.id ?? null;
+const businessOf = (row: UserRow) =>
+  Array.isArray(row.businesses) ? row.businesses[0] : row.businesses;
 
-const toPublic = (row: UserRow) => ({
-  id: row.id,
-  name: row.name,
-  email: row.email,
-  role: row.role,
-  active: row.active,
-  avatarUrl: row.avatar_url,
-  employeeId: employeeIdOf(row),
-});
+const toPublic = (row: UserRow) => {
+  const business = businessOf(row);
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    role: row.role,
+    active: row.active,
+    avatarUrl: row.avatar_url,
+    employeeId: employeeIdOf(row),
+    businessId: row.business_id,
+    businessName: business?.name ?? (row.role === 'SUPER_ADMIN' ? 'Super Admin' : null),
+  };
+};
 
 async function findByEmail(email: string): Promise<UserRow | null> {
   const rows = await run<UserRow[]>(
@@ -58,6 +67,12 @@ authRouter.post(
     if (!user) throw HttpError.unauthorized('Credenciales incorrectas');
     if (!user.active) throw HttpError.forbidden('Tu usuario está desactivado');
 
+    // Si pertenece a un negocio, verificar que el negocio esté activo
+    const business = businessOf(user);
+    if (user.business_id && business && !business.active) {
+      throw HttpError.forbidden('El establecimiento asociado se encuentra suspendido o inactivo');
+    }
+
     const valid = await bcrypt.compare(body.password, user.password_hash);
     if (!valid) throw HttpError.unauthorized('Credenciales incorrectas');
 
@@ -67,6 +82,7 @@ authRouter.post(
       email: user.email,
       role: user.role,
       employeeId: employeeIdOf(user),
+      businessId: user.business_id,
     });
 
     res.json({ token, user: toPublic(user) });
@@ -119,35 +135,49 @@ authRouter.patch(
   }),
 );
 
-/** GET /api/auth/users · solo ADMIN */
+/** GET /api/auth/users · ADMIN o SUPER_ADMIN */
 authRouter.get(
   '/users',
   requireAuth,
-  requireRole('ADMIN'),
-  asyncHandler(async (_req, res) => {
-    const rows = await run<UserRow[]>(
-      sb().from('users').select(SELECT).order('created_at', { ascending: true }),
-    );
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  asyncHandler(async (req, res) => {
+    let query = sb().from('users').select(SELECT).order('created_at', { ascending: true });
+    
+    // Si no es superadmin, restringir al negocio del usuario
+    if (req.user!.role !== 'SUPER_ADMIN') {
+      if (!req.user!.businessId) {
+        throw HttpError.badRequest('No perteneces a ningún establecimiento');
+      }
+      query = query.eq('business_id', req.user!.businessId);
+    }
+
+    const rows = await run<UserRow[]>(query);
     res.json(rows.map(toPublic));
   }),
 );
 
-/** POST /api/auth/users · solo ADMIN */
+/** POST /api/auth/users · solo ADMIN o SUPER_ADMIN */
 authRouter.post(
   '/users',
   requireAuth,
-  requireRole('ADMIN'),
+  requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req, res) => {
     const body = parseBody(
       z.object({
         name: z.string().trim().min(2, 'Nombre demasiado corto'),
         email: z.string().trim().toLowerCase().email(),
         password: z.string().min(6, 'Mínimo 6 caracteres'),
-        role: z.enum(USER_ROLES).default('CASHIER'),
+        role: z.enum(['ADMIN', 'CASHIER', 'OPERATOR']).default('CASHIER'),
         employeeId: z.string().uuid().nullable().optional(),
+        businessId: z.string().uuid().optional(),
       }),
       req,
     );
+
+    const businessId = req.user!.role === 'SUPER_ADMIN' ? (body.businessId ?? null) : req.user!.businessId;
+    if (req.user!.role !== 'SUPER_ADMIN' && !businessId) {
+      throw HttpError.badRequest('No tienes un establecimiento asignado');
+    }
 
     if (await findByEmail(body.email)) {
       throw HttpError.conflict('Ya existe un usuario con ese correo');
@@ -161,6 +191,7 @@ authRouter.post(
           email: body.email,
           password_hash: await bcrypt.hash(body.password, 10),
           role: body.role,
+          business_id: businessId,
         })
         .select(SELECT),
     );
@@ -177,11 +208,11 @@ authRouter.post(
   }),
 );
 
-/** PATCH /api/auth/users/:id · solo ADMIN */
+/** PATCH /api/auth/users/:id · solo ADMIN o SUPER_ADMIN */
 authRouter.patch(
   '/users/:id',
   requireAuth,
-  requireRole('ADMIN'),
+  requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req, res) => {
     const body = parseBody(
       z.object({
@@ -193,6 +224,16 @@ authRouter.patch(
       }),
       req,
     );
+
+    // Si es ADMIN, verificar que el usuario a editar pertenezca a su mismo negocio
+    if (req.user!.role !== 'SUPER_ADMIN') {
+      const targetUser = await run<UserRow[]>(
+        sb().from('users').select(SELECT).eq('id', req.params.id).limit(1),
+      );
+      if (!targetUser[0] || targetUser[0].business_id !== req.user!.businessId) {
+        throw HttpError.notFound('Usuario no encontrado en tu establecimiento');
+      }
+    }
 
     const patch: Record<string, unknown> = {};
     if (body.name !== undefined) patch.name = body.name;

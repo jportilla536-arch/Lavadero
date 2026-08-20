@@ -9,11 +9,13 @@ import { promotionsRouter } from './modules/promotions.routes';
 import { reportsRouter } from './modules/reports.routes';
 import { servicesRouter } from './modules/services.routes';
 import { settingsRouter } from './modules/settings.routes';
+import { superadminRouter } from './modules/superadmin.routes';
 import { uploadsRouter } from './modules/uploads.routes';
 
 export const apiRouter = Router();
 
 apiRouter.use('/auth', authRouter);
+apiRouter.use('/superadmin', superadminRouter);
 apiRouter.use('/customers', customersRouter);
 apiRouter.use('/vehicles', vehiclesRouter);
 apiRouter.use('/services', servicesRouter);
@@ -25,3 +27,4 @@ apiRouter.use('/expenses', expensesRouter);
 apiRouter.use('/reports', reportsRouter);
 apiRouter.use('/settings', settingsRouter);
 apiRouter.use('/uploads', uploadsRouter);
+

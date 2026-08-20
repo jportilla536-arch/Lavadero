@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { camelize } from '../lib/case';
 import { asyncHandler } from '../lib/http';
 import { run, sb } from '../lib/supabase';
-import { requireAuth, requireRole } from '../middleware/auth';
+import { getTenantId, requireAuth, requireRole } from '../middleware/auth';
 import { parseBody } from '../middleware/validate';
 
 const businessSchema = z.object({
@@ -41,8 +41,16 @@ interface BusinessRow {
   id: string;
 }
 
-/** Devuelve la configuración del negocio, creándola si aún no existe. */
-async function getBusiness(): Promise<BusinessRow> {
+/** Devuelve la configuración del negocio del tenant. */
+async function getBusiness(businessId: string | null): Promise<BusinessRow> {
+  if (businessId) {
+    const rows = await run<BusinessRow[]>(
+      sb().from('businesses').select('*').eq('id', businessId).limit(1),
+    );
+    if (rows[0]) return rows[0];
+  }
+
+  // Fallback para superadmin sin contexto o primer inicio
   const rows = await run<BusinessRow[]>(
     sb().from('businesses').select('*').order('created_at', { ascending: true }).limit(1),
   );
@@ -93,18 +101,20 @@ settingsRouter.use(requireAuth);
 /** GET /api/settings/business */
 settingsRouter.get(
   '/business',
-  asyncHandler(async (_req, res) => {
-    res.json(camelize(await getBusiness()));
+  asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
+    res.json(camelize(await getBusiness(businessId)));
   }),
 );
 
 /** PATCH /api/settings/business */
 settingsRouter.patch(
   '/business',
-  requireRole('ADMIN'),
+  requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     const body = parseBody(businessSchema.partial(), req);
-    const current = await getBusiness();
+    const current = await getBusiness(businessId);
     const patch = toRow(body);
 
     if (Object.keys(patch).length === 0) {
@@ -118,3 +128,4 @@ settingsRouter.patch(
     res.json(camelize(updated[0]));
   }),
 );
+

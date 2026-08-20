@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { camelize } from '../lib/case';
 import { asyncHandler, HttpError } from '../lib/http';
 import { rpc, run, sb } from '../lib/supabase';
-import { requireAuth, requireRole } from '../middleware/auth';
+import { getTenantId, requireAuth, requireRole } from '../middleware/auth';
 import { parseBody } from '../middleware/validate';
 import { EMPLOYEE_STATUSES } from '../types';
 
@@ -25,8 +25,9 @@ const employeeSchema = z.object({
 
 type EmployeeInput = z.output<typeof employeeSchema>;
 
-function toRow(input: Partial<EmployeeInput>) {
+function toRow(input: Partial<EmployeeInput>, businessId?: string | null) {
   const row: Record<string, unknown> = {};
+  if (businessId !== undefined && businessId !== null) row.business_id = businessId;
   if (input.name !== undefined) row.name = input.name;
   if (input.position !== undefined) row.position = input.position;
   if (input.phone !== undefined) row.phone = input.phone || null;
@@ -44,22 +45,96 @@ employeesRouter.use(requireAuth);
 employeesRouter.get(
   '/',
   asyncHandler(async (req, res) => {
-    res.json(
-      await rpc<unknown[]>('list_employees', {
-        p_only_active: req.query.onlyActive === 'true',
-        p_working_only: false,
+    const businessId = getTenantId(req);
+    // Consultar empleados por negocio
+    let query = sb()
+      .from('employees')
+      .select('*, users(email, active)')
+      .order('name', { ascending: true });
+
+    if (businessId) query = query.eq('business_id', businessId);
+    if (req.query.onlyActive === 'true') query = query.eq('status', 'ACTIVE');
+
+    const employees = await run<any[]>(query);
+
+    // Mapear con métricas
+    const today = new Date().toISOString().slice(0, 10);
+    const enriched = await Promise.all(
+      employees.map(async (emp) => {
+        let orderQuery = sb()
+          .from('orders')
+          .select('id, status, tip, finished_at')
+          .eq('employee_id', emp.id);
+
+        if (businessId) orderQuery = orderQuery.eq('business_id', businessId);
+
+        const orders = await run<any[]>(orderQuery);
+
+        const activeOrders = orders.filter((o) =>
+          ['PENDING', 'IN_PROGRESS', 'READY'].includes(o.status),
+        ).length;
+        const finishedTodayOrders = orders.filter(
+          (o) => o.status === 'FINISHED' && o.finished_at && o.finished_at.slice(0, 10) === today,
+        );
+        const finishedToday = finishedTodayOrders.length;
+        const tipsToday = finishedTodayOrders.reduce((sum, o) => sum + (o.tip || 0), 0);
+
+        return {
+          id: emp.id,
+          name: emp.name,
+          position: emp.position,
+          phone: emp.phone,
+          status: emp.status,
+          hiredAt: emp.hired_at,
+          userId: emp.user_id,
+          businessId: emp.business_id,
+          userEmail: emp.users?.email ?? null,
+          userActive: emp.users?.active ?? null,
+          activeOrders,
+          finishedToday,
+          tipsToday,
+        };
       }),
     );
+
+    res.json(camelize(enriched));
   }),
 );
 
 /** GET /api/employees/working · solo quienes tienen órdenes en curso */
 employeesRouter.get(
   '/working',
-  asyncHandler(async (_req, res) => {
-    res.json(
-      await rpc<unknown[]>('list_employees', { p_only_active: true, p_working_only: true }),
-    );
+  asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
+    let query = sb().from('employees').select('*').eq('status', 'ACTIVE');
+    if (businessId) query = query.eq('business_id', businessId);
+
+    const employees = await run<any[]>(query);
+    const result = [];
+
+    for (const emp of employees) {
+      let orderQuery = sb()
+        .from('orders')
+        .select('id', { count: 'exact', head: true })
+        .eq('employee_id', emp.id)
+        .in('status', ['PENDING', 'IN_PROGRESS', 'READY']);
+
+      if (businessId) orderQuery = orderQuery.eq('business_id', businessId);
+
+      const { count } = await orderQuery;
+      if ((count ?? 0) > 0) {
+        result.push({
+          id: emp.id,
+          name: emp.name,
+          position: emp.position,
+          phone: emp.phone,
+          status: emp.status,
+          activeOrders: count,
+        });
+      }
+    }
+
+    res.json(camelize(result));
   }),
 );
 
@@ -67,17 +142,29 @@ employeesRouter.get(
 employeesRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {
-    const employee = await rpc<unknown>('employee_detail', { p_id: req.params.id });
-    if (!employee) throw HttpError.notFound('Empleado no encontrado');
-    res.json(employee);
+    const businessId = getTenantId(req);
+    let query = sb()
+      .from('employees')
+      .select('*, users(email, active)')
+      .eq('id', req.params.id)
+      .limit(1);
+
+    if (businessId && req.user?.role !== 'SUPER_ADMIN') {
+      query = query.eq('business_id', businessId);
+    }
+
+    const rows = await run<any[]>(query);
+    if (!rows[0]) throw HttpError.notFound('Empleado no encontrado');
+    res.json(camelize(rows[0]));
   }),
 );
 
 /** POST /api/employees */
 employeesRouter.post(
   '/',
-  requireRole('ADMIN'),
+  requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     const body = parseBody(employeeSchema, req);
     let createdUserId = body.userId || null;
 
@@ -98,13 +185,14 @@ employeesRouter.post(
             email: body.userAccount.email,
             password_hash: passwordHash,
             role: 'OPERATOR',
+            business_id: businessId,
           })
           .select('id'),
       );
       createdUserId = createdUser[0].id;
     }
 
-    const row = toRow(body);
+    const row = toRow(body, businessId);
     row.user_id = createdUserId;
 
     const created = await run<unknown[]>(sb().from('employees').insert(row).select('*'));
@@ -115,14 +203,18 @@ employeesRouter.post(
 /** PATCH /api/employees/:id */
 employeesRouter.patch(
   '/:id',
-  requireRole('ADMIN'),
+  requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     const body = parseBody(employeeSchema.partial(), req);
     const patch = toRow(body);
 
-    const currentEmployees = await run<{ id: string; user_id: string | null }[]>(
-      sb().from('employees').select('id, user_id').eq('id', req.params.id).limit(1),
-    );
+    let query = sb().from('employees').select('id, user_id').eq('id', req.params.id);
+    if (businessId && req.user?.role !== 'SUPER_ADMIN') {
+      query = query.eq('business_id', businessId);
+    }
+
+    const currentEmployees = await run<{ id: string; user_id: string | null }[]>(query.limit(1));
     const currentEmployee = currentEmployees[0];
     if (!currentEmployee) throw HttpError.notFound('Empleado no encontrado');
 
@@ -154,6 +246,7 @@ employeesRouter.patch(
               email: body.userAccount.email,
               password_hash: passwordHash,
               role: 'OPERATOR',
+              business_id: businessId,
             })
             .select('id'),
         );
@@ -174,33 +267,40 @@ employeesRouter.patch(
       return;
     }
 
-    const updated = await rpc<unknown>('employee_detail', { p_id: req.params.id });
-    res.json(updated);
+    const rows = await run<any[]>(
+      sb().from('employees').select('*, users(email, active)').eq('id', req.params.id).limit(1),
+    );
+    res.json(camelize(rows[0]));
   }),
 );
 
 /** DELETE /api/employees/:id · se desactiva si tiene órdenes asociadas */
 employeesRouter.delete(
   '/:id',
-  requireRole('ADMIN'),
+  requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     const { count } = await sb()
       .from('orders')
       .select('id', { count: 'exact', head: true })
       .eq('employee_id', req.params.id);
 
     if ((count ?? 0) > 0) {
-      const archived = await run<unknown[]>(
-        sb().from('employees').update({ status: 'INACTIVE' }).eq('id', req.params.id).select('*'),
-      );
+      let query = sb().from('employees').update({ status: 'INACTIVE' }).eq('id', req.params.id);
+      if (businessId && req.user?.role !== 'SUPER_ADMIN') {
+        query = query.eq('business_id', businessId);
+      }
+      const archived = await run<unknown[]>(query.select('*'));
       if (!archived[0]) throw HttpError.notFound('Empleado no encontrado');
       res.json({ archived: true, employee: camelize(archived[0]) });
       return;
     }
 
-    const deleted = await run<unknown[]>(
-      sb().from('employees').delete().eq('id', req.params.id).select('id'),
-    );
+    let delQuery = sb().from('employees').delete().eq('id', req.params.id);
+    if (businessId && req.user?.role !== 'SUPER_ADMIN') {
+      delQuery = delQuery.eq('business_id', businessId);
+    }
+    const deleted = await run<unknown[]>(delQuery.select('id'));
     if (!deleted[0]) throw HttpError.notFound('Empleado no encontrado');
     res.status(204).send();
   }),

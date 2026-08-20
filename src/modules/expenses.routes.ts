@@ -1,10 +1,10 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import { z } from 'zod';
 import { camelize } from '../lib/case';
 import { resolveRange } from '../lib/dates';
 import { asyncHandler, HttpError } from '../lib/http';
 import { run, sb } from '../lib/supabase';
-import { requireAuth, requireRole } from '../middleware/auth';
+import { getTenantId, requireAuth, requireRole } from '../middleware/auth';
 import { parseBody, parseQuery } from '../middleware/validate';
 import { EXPENSE_CATEGORIES } from '../types';
 
@@ -18,8 +18,9 @@ const expenseSchema = z.object({
 
 type ExpenseInput = z.output<typeof expenseSchema>;
 
-function toRow(input: Partial<ExpenseInput>) {
+function toRow(input: Partial<ExpenseInput>, businessId?: string | null) {
   const row: Record<string, unknown> = {};
+  if (businessId !== undefined && businessId !== null) row.business_id = businessId;
   if (input.concept !== undefined) row.concept = input.concept;
   if (input.category !== undefined) row.category = input.category;
   if (input.amount !== undefined) row.amount = input.amount;
@@ -40,6 +41,7 @@ expensesRouter.use(requireAuth);
 expensesRouter.get(
   '/',
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     const range = resolveRange(
       parseQuery(
         z.object({
@@ -51,14 +53,16 @@ expensesRouter.get(
       ),
     );
 
-    const rows = await run<ExpenseRow[]>(
-      sb()
-        .from('expenses')
-        .select('*')
-        .gte('spent_at', range.from.toISOString())
-        .lte('spent_at', range.to.toISOString())
-        .order('spent_at', { ascending: false }),
-    );
+    let query = sb()
+      .from('expenses')
+      .select('*')
+      .gte('spent_at', range.from.toISOString())
+      .lte('spent_at', range.to.toISOString())
+      .order('spent_at', { ascending: false });
+
+    if (businessId) query = query.eq('business_id', businessId);
+
+    const rows = await run<ExpenseRow[]>(query);
 
     res.json({
       range: { from: range.from, to: range.to, preset: range.preset },
@@ -72,8 +76,11 @@ expensesRouter.get(
 expensesRouter.post(
   '/',
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     const body = parseBody(expenseSchema, req);
-    const created = await run<unknown[]>(sb().from('expenses').insert(toRow(body)).select('*'));
+    const created = await run<unknown[]>(
+      sb().from('expenses').insert(toRow(body, businessId)).select('*'),
+    );
     res.status(201).json(camelize(created[0]));
   }),
 );
@@ -82,13 +89,17 @@ expensesRouter.post(
 expensesRouter.patch(
   '/:id',
   asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
     const body = parseBody(expenseSchema.partial(), req);
     const patch = toRow(body);
     if (Object.keys(patch).length === 0) throw HttpError.badRequest('No hay cambios que aplicar');
 
-    const updated = await run<unknown[]>(
-      sb().from('expenses').update(patch).eq('id', req.params.id).select('*'),
-    );
+    let query = sb().from('expenses').update(patch).eq('id', req.params.id);
+    if (businessId && req.user?.role !== 'SUPER_ADMIN') {
+      query = query.eq('business_id', businessId);
+    }
+
+    const updated = await run<unknown[]>(query.select('*'));
     if (!updated[0]) throw HttpError.notFound('Gasto no encontrado');
     res.json(camelize(updated[0]));
   }),
@@ -97,11 +108,15 @@ expensesRouter.patch(
 /** DELETE /api/expenses/:id */
 expensesRouter.delete(
   '/:id',
-  requireRole('ADMIN'),
+  requireRole('ADMIN', 'SUPER_ADMIN'),
   asyncHandler(async (req, res) => {
-    const deleted = await run<unknown[]>(
-      sb().from('expenses').delete().eq('id', req.params.id).select('id'),
-    );
+    const businessId = getTenantId(req);
+    let query = sb().from('expenses').delete().eq('id', req.params.id);
+    if (businessId && req.user?.role !== 'SUPER_ADMIN') {
+      query = query.eq('business_id', businessId);
+    }
+
+    const deleted = await run<unknown[]>(query.select('id'));
     if (!deleted[0]) throw HttpError.notFound('Gasto no encontrado');
     res.status(204).send();
   }),
