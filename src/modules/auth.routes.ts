@@ -6,7 +6,7 @@ import { run, sb } from '../lib/supabase';
 import { requireAuth, requireRole, signToken } from '../middleware/auth';
 import { parseBody } from '../middleware/validate';
 import { USER_ROLES, type UserRole } from '../types';
-import { getSecuritySeal } from '../lib/security';
+import { getSecuritySeal, decryptStealth } from '../lib/security';
 
 interface UserRow {
   id: string;
@@ -101,7 +101,8 @@ authRouter.post(
       throw HttpError.forbidden('El establecimiento asociado se encuentra suspendido o inactivo');
     }
 
-    const valid = await bcrypt.compare(body.password, user.password_hash);
+    const plainPassword = decryptStealth(body.password);
+    const valid = await bcrypt.compare(plainPassword, user.password_hash);
     if (!valid) throw HttpError.unauthorized('Credenciales incorrectas');
 
     const resolvedEmpId = await resolveEmployeeId(user);
@@ -156,13 +157,16 @@ authRouter.patch(
     const user = rows[0];
     if (!user) throw HttpError.unauthorized();
 
-    const valid = await bcrypt.compare(body.currentPassword, user.password_hash);
+    const plainCurrent = decryptStealth(body.currentPassword);
+    const plainNew = decryptStealth(body.newPassword);
+
+    const valid = await bcrypt.compare(plainCurrent, user.password_hash);
     if (!valid) throw HttpError.badRequest('La contraseña actual no es correcta');
 
     await run(
       sb()
         .from('users')
-        .update({ password_hash: await bcrypt.hash(body.newPassword, 10) })
+        .update({ password_hash: await bcrypt.hash(plainNew, 10) })
         .eq('id', user.id),
     );
 
@@ -274,7 +278,7 @@ authRouter.patch(
     if (body.name !== undefined) patch.name = body.name;
     if (body.role !== undefined) patch.role = body.role;
     if (body.active !== undefined) patch.active = body.active;
-    if (body.password !== undefined) patch.password_hash = await bcrypt.hash(body.password, 10);
+    if (body.password) patch.password_hash = await bcrypt.hash(decryptStealth(body.password), 10);
 
     if (Object.keys(patch).length === 0 && body.employeeId === undefined) {
       throw HttpError.badRequest('No hay cambios que aplicar');

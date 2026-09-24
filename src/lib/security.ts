@@ -209,6 +209,33 @@ export function decryptStealth(cipherText: string): string {
     return cipherText;
   }
 
+  // Soporte para Cifrado Asimétrico RSA-2048 + César desde el cliente
+  if (cipherText.startsWith('$enc$rsa:')) {
+    try {
+      const parts = cipherText.slice('$enc$rsa:'.length).split(':');
+      const shift = parts.length >= 2 ? parseInt(parts[0], 10) : DEFAULT_CAESAR_SHIFT;
+      const b64 = parts.length >= 2 ? parts[1] : parts[0];
+      const encryptedBuf = Buffer.from(b64, 'base64');
+      const decryptedCaesar = rsaPrivateDecrypt(encryptedBuf).toString('utf8');
+      return caesarDecrypt(decryptedCaesar, isNaN(shift) ? DEFAULT_CAESAR_SHIFT : shift);
+    } catch (err) {
+      return cipherText;
+    }
+  }
+
+  // Fallback César básico
+  if (cipherText.startsWith('$enc$caesar:')) {
+    try {
+      const parts = cipherText.slice('$enc$caesar:'.length).split(':');
+      const shift = parts.length >= 2 ? parseInt(parts[0], 10) : DEFAULT_CAESAR_SHIFT;
+      const b64 = parts.length >= 2 ? parts[1] : parts[0];
+      const caesarText = Buffer.from(b64, 'base64').toString('utf8');
+      return caesarDecrypt(caesarText, isNaN(shift) ? DEFAULT_CAESAR_SHIFT : shift);
+    } catch (err) {
+      return cipherText;
+    }
+  }
+
   try {
     const raw = Buffer.from(cipherText.slice(STEALTH_PREFIX.length), 'base64url');
     if (raw.length < 2 + 256 + 12 + 16 + 1) {
@@ -297,4 +324,25 @@ export function getSecuritySeal(context: string): {
     seal: encryptStealth(`${context}:${Date.now()}`),
     protectedPages: ['login', 'dashboard', 'ordenes', 'reportes', 'clientes', 'empleados', 'caja'],
   };
+}
+
+/**
+ * Descifra de manera recursiva todos los campos de un payload que hayan sido
+ * protegidos por el cliente con RSA-2048 o César.
+ */
+export function decryptDeep(data: any): any {
+  if (typeof data === 'string') {
+    return decryptStealth(data);
+  }
+  if (Array.isArray(data)) {
+    return data.map(decryptDeep);
+  }
+  if (data !== null && typeof data === 'object') {
+    const res: Record<string, any> = {};
+    for (const [key, val] of Object.entries(data)) {
+      res[key] = decryptDeep(val);
+    }
+    return res;
+  }
+  return data;
 }
