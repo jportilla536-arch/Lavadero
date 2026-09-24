@@ -15,7 +15,7 @@ import {
   PAYMENT_METHODS,
   type OrderStatus,
 } from '../types';
-import { decryptStealth, encryptStealth } from '../lib/security';
+import { decryptStealth, encryptStealth, getSecuritySeal } from '../lib/security';
 
 export const ordersRouter = Router();
 
@@ -133,6 +133,7 @@ ordersRouter.get(
       pageSize: filters.pageSize,
       total: result.total,
       totalAmount: result.totalAmount,
+      _security: getSecuritySeal('orders:list'),
     });
   }),
 );
@@ -173,6 +174,7 @@ ordersRouter.get(
       PENDING: data.filter((order) => order.status === 'PENDING'),
       IN_PROGRESS: data.filter((order) => order.status === 'IN_PROGRESS'),
       READY: data.filter((order) => order.status === 'READY'),
+      _security: getSecuritySeal('orders:board'),
     });
   }),
 );
@@ -203,6 +205,10 @@ ordersRouter.get(
             item.employeeId === employeeId || (!item.employeeId && order.employeeId === employeeId),
         );
       }
+    }
+
+    if (typeof order === 'object' && order !== null) {
+      order._security = getSecuritySeal(`order:${order.id || req.params.id}`);
     }
 
     res.json(order);
@@ -316,12 +322,89 @@ ordersRouter.patch(
       req,
     );
 
-    const order = await rpc<unknown>('set_order_status', {
+    // 1. Obtener la orden con sus items y eventos registrados
+    const { data: rawOrder } = await sb()
+      .from('orders')
+      .select('id, status, employee_id, order_items(id, name, employee_id), order_events(id, message, created_at)')
+      .eq('id', req.params.id)
+      .single();
+
+    if (!rawOrder) throw HttpError.notFound('Orden no encontrada');
+
+    // Empleados únicos asignados a la orden o a los servicios individuales
+    const assignedEmpIds = Array.from(
+      new Set(
+        ((rawOrder.order_items as any[]) || [])
+          .map((i: any) => i.employee_id || rawOrder.employee_id)
+          .filter(Boolean),
+      ),
+    ) as string[];
+
+    const isMultiEmployee = assignedEmpIds.length > 1;
+    const operatorEmpId = req.user?.employeeId;
+
+    // Si es un empleado (OPERATOR) marcando la orden como READY y hay 2 o más empleados asignados:
+    // Debe registrar su terminación individual y esperar a que todos los empleados asignados terminen.
+    if (body.status === 'READY' && isMultiEmployee && req.user?.role === 'OPERATOR') {
+      if (!operatorEmpId) {
+        throw HttpError.badRequest('No se pudo identificar tu ID de empleado');
+      }
+
+      const existingEvents = (rawOrder.order_events as any[]) || [];
+      const tag = `[EMPLEADO_LISTO:${operatorEmpId}]`;
+      const alreadyLogged = existingEvents.some((ev: any) => ev.message && ev.message.includes(tag));
+
+      if (!alreadyLogged) {
+        await sb().from('order_events').insert({
+          order_id: req.params.id,
+          message: `Servicio completado por empleado: ${req.user.name} ${tag}`,
+          status: 'IN_PROGRESS',
+          user_name: actor(req.user?.name),
+        });
+      }
+
+      // Consultar lista actualizada de eventos
+      const { data: updatedEvents } = await sb()
+        .from('order_events')
+        .select('message')
+        .eq('order_id', req.params.id);
+
+      const finishedEmpIds = new Set<string>();
+      for (const ev of updatedEvents || []) {
+        const match = (ev.message || '').match(/\[EMPLEADO_LISTO:([a-f0-9-]+)\]/i);
+        if (match && match[1]) {
+          finishedEmpIds.add(match[1]);
+        }
+      }
+
+      const allFinished = assignedEmpIds.every((empId) => finishedEmpIds.has(empId));
+
+      if (!allFinished) {
+        // Aún falta que otro empleado termine. Mantener IN_PROGRESS y devolver detalle actualizado.
+        const detail = await rpc<any>('order_detail', { p_ref: req.params.id });
+        const resPayload = {
+          ...(typeof detail === 'object' && detail !== null ? detail : {}),
+          status: 'IN_PROGRESS',
+          waitingForOtherEmployees: true,
+          message:
+            'Has completado tus servicios asignados. El vehículo continúa en proceso esperando a que los demás empleados terminen para poder cobrar.',
+          _security: getSecuritySeal(`order-status:${req.params.id}`),
+        };
+        return res.json(resPayload);
+      }
+      // Si todos los empleados terminaron, continúa para actualizar estado a READY.
+    }
+
+    const order = await rpc<any>('set_order_status', {
       p_order_id: req.params.id,
       p_status: body.status,
       p_reason: body.reason ?? null,
       p_user: actor(req.user?.name),
     });
+
+    if (typeof order === 'object' && order !== null) {
+      order._security = getSecuritySeal(`order-status:${req.params.id}`);
+    }
 
     res.json(order);
   }),
@@ -400,6 +483,37 @@ ordersRouter.post(
       req,
     );
 
+    // Validar que si el vehículo tiene 2 o más empleados asignados, todos hayan terminado antes de cobrar
+    const { data: orderCheck } = await sb()
+      .from('orders')
+      .select('id, status, employee_id, order_items(id, employee_id), order_events(message)')
+      .eq('id', req.params.id)
+      .single();
+
+    if (orderCheck) {
+      const assignedEmpIds = Array.from(
+        new Set(
+          ((orderCheck.order_items as any[]) || [])
+            .map((i: any) => i.employee_id || orderCheck.employee_id)
+            .filter(Boolean),
+        ),
+      ) as string[];
+
+      if (assignedEmpIds.length > 1 && orderCheck.status !== 'READY') {
+        const finishedEmpIds = new Set<string>();
+        for (const ev of (orderCheck.order_events as any[]) || []) {
+          const match = (ev.message || '').match(/\[EMPLEADO_LISTO:([a-f0-9-]+)\]/i);
+          if (match && match[1]) finishedEmpIds.add(match[1]);
+        }
+        const allFinished = assignedEmpIds.every((id) => finishedEmpIds.has(id));
+        if (!allFinished) {
+          throw HttpError.badRequest(
+            'El vehículo tiene 2 o más empleados asignados. Todos los empleados deben terminar sus servicios antes de poder cobrar.',
+          );
+        }
+      }
+    }
+
     const payload: Record<string, unknown> = {
       tip: body.tip,
       requiresInvoice: body.requiresInvoice,
@@ -410,11 +524,15 @@ ordersRouter.post(
     if (body.discountValue !== undefined) payload.discountValue = body.discountValue;
     if ('promotionId' in req.body) payload.promotionId = body.promotionId ?? null;
 
-    const order = await rpc<unknown>('checkout_order', {
+    const order = await rpc<any>('checkout_order', {
       p_order_id: req.params.id,
       payload,
       p_user: actor(req.user?.name),
     });
+
+    if (typeof order === 'object' && order !== null) {
+      order._security = getSecuritySeal(`order-checkout:${req.params.id}`);
+    }
 
     res.json(order);
   }),

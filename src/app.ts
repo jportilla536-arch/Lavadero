@@ -6,6 +6,7 @@ import { env } from './config/env';
 import { sb } from './lib/supabase';
 import { errorHandler, notFoundHandler } from './middleware/error';
 import { apiRouter } from './routes';
+import { getSecurityFingerprint } from './lib/security';
 
 export function createApp() {
   const app = express();
@@ -65,6 +66,14 @@ export function createApp() {
       database: dbStatus,
       time: new Date().toISOString(),
     });
+  });
+
+  // Middleware de Seguridad de Información (RSA-2048 Asimétrico + César)
+  app.use((_req, res, next) => {
+    res.setHeader('X-Information-Security', 'RSA-2048-Asymmetric + Caesar-Cipher');
+    res.setHeader('X-Security-Policy', 'RSA-OAEP-SHA256+Caesar-Stealth');
+    res.setHeader('X-RSA-Key-Fingerprint', getSecurityFingerprint());
+    next();
   });
 
   app.use('/api', apiRouter);

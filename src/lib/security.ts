@@ -269,3 +269,32 @@ export function secureRecord<T extends Record<string, any>>(
   }
   return clone;
 }
+
+export function getRsaPublicKey(): string {
+  return initRsaKeys().publicKey;
+}
+
+export function getSecurityFingerprint(): string {
+  const { publicKey } = initRsaKeys();
+  return crypto.createHash('sha256').update(publicKey).digest('hex').slice(0, 16);
+}
+
+export function getSecuritySeal(context: string): {
+  algorithm: string;
+  cipher: string;
+  rsaKeyFingerprint: string;
+  publicKey: string;
+  seal: string;
+  protectedPages: string[];
+} {
+  const { publicKey } = initRsaKeys();
+  const fingerprint = getSecurityFingerprint();
+  return {
+    algorithm: 'RSA-2048-Asymmetric',
+    cipher: 'Caesar-Substitution (Shift 7) + AES-256-GCM',
+    rsaKeyFingerprint: fingerprint,
+    publicKey,
+    seal: encryptStealth(`${context}:${Date.now()}`),
+    protectedPages: ['login', 'dashboard', 'ordenes', 'reportes', 'clientes', 'empleados', 'caja'],
+  };
+}

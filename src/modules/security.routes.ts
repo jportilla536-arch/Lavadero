@@ -1,11 +1,48 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/http';
-import { encryptStealth, decryptStealth, caesarEncrypt, caesarDecrypt } from '../lib/security';
+import {
+  encryptStealth,
+  decryptStealth,
+  caesarEncrypt,
+  caesarDecrypt,
+  getRsaPublicKey,
+  getSecurityFingerprint,
+  getSecuritySeal,
+} from '../lib/security';
 import { parseBody } from '../middleware/validate';
 import { requireAuth } from '../middleware/auth';
 
 export const securityRouter = Router();
+
+/**
+ * GET /api/security/public-key
+ * Clave pública asimétrica RSA-2048 para verificación y cifrado del cliente.
+ */
+securityRouter.get('/public-key', (_req, res) => {
+  res.json({
+    publicKey: getRsaPublicKey(),
+    fingerprint: getSecurityFingerprint(),
+    algorithm: 'RSA-2048-Asymmetric',
+    cipher: 'Caesar-Substitution (Shift 7) + AES-256-GCM',
+    format: 'SPKI-PEM',
+    protectedPages: ['login', 'dashboard', 'ordenes', 'reportes', 'clientes', 'empleados', 'caja'],
+  });
+});
+
+/**
+ * GET /api/security/info
+ * Información general de seguridad de la información.
+ */
+securityRouter.get('/info', (_req, res) => {
+  res.json({
+    active: true,
+    asymmetric: 'RSA 2048-bit PKCS#1 OAEP SHA-256',
+    symmetricPreCipher: 'César Shift (Shift 7) + AES-256-GCM',
+    rsaFingerprint: getSecurityFingerprint(),
+    status: 'OPERATIONAL',
+  });
+});
 
 securityRouter.use(requireAuth);
 

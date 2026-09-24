@@ -5,6 +5,7 @@ import { rpc } from '../lib/supabase';
 import { getTenantId, requireAuth } from '../middleware/auth';
 import { parseQuery } from '../middleware/validate';
 import { resolveRange } from '../lib/dates';
+import { getSecuritySeal } from '../lib/security';
 
 export const reportsRouter = Router();
 
@@ -40,7 +41,11 @@ const rangeReport = (path: string, fn: string, wrap?: (data: unknown) => object)
     asyncHandler(async (req, res) => {
       const { info, args } = rangeOf(req);
       const data = await rpc<unknown>(fn, args);
-      res.json({ range: info, ...(wrap ? wrap(data) : (data as object)) });
+      res.json({
+        range: info,
+        ...(wrap ? wrap(data) : (data as object)),
+        _security: getSecuritySeal(path),
+      });
     }),
   );
 
@@ -61,7 +66,10 @@ reportsRouter.get(
       }
       if (empId) {
         const employeeData = await rpc<any>('report_dashboard_employee', { p_employee_id: empId });
-        res.json(employeeData);
+        res.json({
+          ...(typeof employeeData === 'object' && employeeData !== null ? employeeData : {}),
+          _security: getSecuritySeal('dashboard:employee'),
+        });
         return;
       }
       // Si no tiene empleado asignado, retornar estructura vacía segura sin revelar datos administrativos
@@ -78,11 +86,16 @@ reportsRouter.get(
         },
         activeVehicles: [],
         latestOrders: [],
+        _security: getSecuritySeal('dashboard:empty'),
       });
       return;
     }
 
-    res.json(await rpc('report_dashboard', { p_business_id: businessId ?? null }));
+    const adminDashboard = await rpc<any>('report_dashboard', { p_business_id: businessId ?? null });
+    res.json({
+      ...(typeof adminDashboard === 'object' && adminDashboard !== null ? adminDashboard : {}),
+      _security: getSecuritySeal('dashboard:admin'),
+    });
   }),
 );
 
