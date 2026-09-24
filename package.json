@@ -12,7 +12,9 @@
     "db:check": "tsx src/db/check.ts",
     "db:probe": "tsx src/db/probe.ts",
     "db:seed": "tsx src/db/seed.ts",
-    "db:cleanup": "tsx src/db/cleanup.ts"
+    "db:cleanup": "tsx src/db/cleanup.ts",
+    "keep-alive": "node scripts/keep-alive.mjs",
+    "keep-alive:once": "node scripts/keep-alive.mjs --once"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
