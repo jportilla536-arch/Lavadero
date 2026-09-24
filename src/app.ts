@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import { env } from './config/env';
+import { sb } from './lib/supabase';
 import { errorHandler, notFoundHandler } from './middleware/error';
 import { apiRouter } from './routes';
 
@@ -44,8 +45,26 @@ export function createApp() {
     app.use('/uploads', express.static(env.storage.localDir, { maxAge: '7d' }));
   }
 
-  app.get('/health', (_req, res) => {
-    res.json({ ok: true, service: 'lavadero-api', env: env.nodeEnv, time: new Date().toISOString() });
+  app.get('/health', async (_req, res) => {
+    let dbStatus = 'ok';
+    try {
+      if (env.supabase.url && env.supabase.serviceRoleKey) {
+        const { error } = await sb().from('businesses').select('id', { head: true, count: 'exact' });
+        if (error) {
+          dbStatus = `warning: ${error.message}`;
+        }
+      }
+    } catch (err: unknown) {
+      dbStatus = `error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+
+    res.json({
+      ok: true,
+      service: 'lavadero-api',
+      env: env.nodeEnv,
+      database: dbStatus,
+      time: new Date().toISOString(),
+    });
   });
 
   app.use('/api', apiRouter);
