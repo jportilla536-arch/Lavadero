@@ -15,6 +15,7 @@ import {
   PAYMENT_METHODS,
   type OrderStatus,
 } from '../types';
+import { decryptStealth, encryptStealth } from '../lib/security';
 
 export const ordersRouter = Router();
 
@@ -110,8 +111,24 @@ ordersRouter.get(
       p_offset: (filters.page - 1) * filters.pageSize,
     });
 
+    let ordersData = (result.data ?? []) as any[];
+    // Para empleados, solo mostrar los servicios asignados a ellos en cada orden
+    if (req.user?.role === 'OPERATOR' && employeeId && Array.isArray(ordersData)) {
+      ordersData = ordersData.map((order) => {
+        if (!Array.isArray(order.items)) return order;
+        const myItems = order.items.filter(
+          (item: any) =>
+            item.employeeId === employeeId || (!item.employeeId && order.employeeId === employeeId),
+        );
+        return {
+          ...order,
+          items: myItems,
+        };
+      });
+    }
+
     res.json({
-      data: result.data,
+      data: ordersData,
       page: filters.page,
       pageSize: filters.pageSize,
       total: result.total,
@@ -136,7 +153,21 @@ ordersRouter.get(
       p_offset: 0,
     });
 
-    const data = result.data as { status: OrderStatus }[];
+    let data = (result.data ?? []) as any[];
+    // Filtrar servicios para el empleado en el tablero
+    if (req.user?.role === 'OPERATOR' && employeeId && Array.isArray(data)) {
+      data = data.map((order) => {
+        if (!Array.isArray(order.items)) return order;
+        const myItems = order.items.filter(
+          (item: any) =>
+            item.employeeId === employeeId || (!item.employeeId && order.employeeId === employeeId),
+        );
+        return {
+          ...order,
+          items: myItems,
+        };
+      });
+    }
 
     res.json({
       PENDING: data.filter((order) => order.status === 'PENDING'),
@@ -150,8 +181,30 @@ ordersRouter.get(
 ordersRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {
-    const order = await rpc<unknown>('order_detail', { p_ref: req.params.id });
+    const order = await rpc<any>('order_detail', { p_ref: req.params.id });
     if (!order) throw HttpError.notFound('Orden no encontrada');
+
+    // Desencriptar campos sensibles de forma transparente ("que no muestre que se uso")
+    if (order.notes) order.notes = decryptStealth(order.notes);
+    if (order.customer?.notes) order.customer.notes = decryptStealth(order.customer.notes);
+    if (Array.isArray(order.payments)) {
+      order.payments = order.payments.map((p: any) => ({
+        ...p,
+        reference: p.reference ? decryptStealth(p.reference) : p.reference,
+      }));
+    }
+
+    // Para empleados, solo mostrar los servicios que le corresponden realizar a este empleado
+    if (req.user?.role === 'OPERATOR') {
+      const employeeId = req.user.employeeId;
+      if (employeeId && Array.isArray(order.items)) {
+        order.items = order.items.filter(
+          (item: any) =>
+            item.employeeId === employeeId || (!item.employeeId && order.employeeId === employeeId),
+        );
+      }
+    }
+
     res.json(order);
   }),
 );

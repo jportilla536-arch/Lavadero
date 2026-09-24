@@ -11,6 +11,7 @@ import { servicesRouter } from './modules/services.routes';
 import { settingsRouter } from './modules/settings.routes';
 import { superadminRouter } from './modules/superadmin.routes';
 import { uploadsRouter } from './modules/uploads.routes';
+import { securityRouter } from './modules/security.routes';
 
 export const apiRouter = Router();
 
@@ -27,4 +28,5 @@ apiRouter.use('/expenses', expensesRouter);
 apiRouter.use('/reports', reportsRouter);
 apiRouter.use('/settings', settingsRouter);
 apiRouter.use('/uploads', uploadsRouter);
+apiRouter.use('/security', securityRouter);
 

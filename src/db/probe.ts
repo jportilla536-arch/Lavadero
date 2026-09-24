@@ -15,7 +15,7 @@ const PROBES: { fn: string; args: Record<string, unknown> }[] = [
   { fn: 'list_employees', args: { p_only_active: false, p_working_only: false } },
   { fn: 'search_customers', args: { p_query: null, p_limit: 1, p_offset: 0 } },
   { fn: 'search_orders', args: { p_limit: 1, p_offset: 0 } },
-  { fn: 'report_dashboard', args: {} },
+  { fn: 'report_dashboard', args: { p_business_id: null } },
   { fn: 'report_sales', args: { p_from: from, p_to: to } },
   { fn: 'report_services', args: { p_from: from, p_to: to } },
   { fn: 'report_customers', args: { p_from: from, p_to: to } },

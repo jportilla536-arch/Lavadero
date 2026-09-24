@@ -22,10 +22,10 @@ function rangeOf(req: Request) {
   const businessId = getTenantId(req);
   return {
     info: { from: range.from, to: range.to, preset: range.preset },
+    businessId,
     args: {
       p_from: range.from.toISOString(),
       p_to: range.to.toISOString(),
-      p_business_id: businessId,
     },
   };
 }
@@ -49,13 +49,40 @@ reportsRouter.get(
   '/dashboard',
   asyncHandler(async (req, res) => {
     const businessId = getTenantId(req);
-    if (req.user?.role === 'OPERATOR' && req.user.employeeId) {
-      res.json(
-        await rpc('report_dashboard_employee', { p_employee_id: req.user.employeeId }),
-      );
+    // Si el usuario es empleado (OPERATOR), SIEMPRE debe cargar exclusivamente su información
+    if (req.user?.role === 'OPERATOR') {
+      let empId = req.user.employeeId;
+      if (!empId) {
+        const { sb, run } = await import('../lib/supabase');
+        const empRows = await run<any[]>(
+          sb().from('employees').select('id').eq('user_id', req.user.id).limit(1),
+        );
+        empId = empRows[0]?.id ?? null;
+      }
+      if (empId) {
+        const employeeData = await rpc<any>('report_dashboard_employee', { p_employee_id: empId });
+        res.json(employeeData);
+        return;
+      }
+      // Si no tiene empleado asignado, retornar estructura vacía segura sin revelar datos administrativos
+      res.json({
+        kpis: {
+          waiting: 0,
+          inProgress: 0,
+          ready: 0,
+          finishedToday: 0,
+          servicesToday: 0,
+          earningsToday: 0,
+          earningsMonth: 0,
+          tipsToday: 0,
+        },
+        activeVehicles: [],
+        latestOrders: [],
+      });
       return;
     }
-    res.json(await rpc('report_dashboard', { p_business_id: businessId }));
+
+    res.json(await rpc('report_dashboard', { p_business_id: businessId ?? null }));
   }),
 );
 
@@ -64,10 +91,18 @@ reportsRouter.get(
   '/employee-earnings',
   asyncHandler(async (req, res) => {
     const { info, args } = rangeOf(req);
-    const employeeId =
+    let employeeId =
       req.user?.role === 'OPERATOR'
         ? req.user.employeeId
         : (req.query.employeeId as string | undefined);
+
+    if (req.user?.role === 'OPERATOR' && !employeeId) {
+      const { sb, run } = await import('../lib/supabase');
+      const empRows = await run<any[]>(
+        sb().from('employees').select('id').eq('user_id', req.user.id).limit(1),
+      );
+      employeeId = empRows[0]?.id ?? undefined;
+    }
 
     if (!employeeId) {
       res.json({
@@ -87,8 +122,9 @@ reportsRouter.get(
     }
 
     const data = await rpc<Record<string, unknown>>('report_employee_earnings', {
-      ...args,
       p_employee_id: employeeId,
+      p_from: args.p_from,
+      p_to: args.p_to,
     });
 
     res.json({ range: info, ...data });
@@ -111,8 +147,9 @@ reportsRouter.get(
   asyncHandler(async (req, res) => {
     const { info, args } = rangeOf(req);
     const data = await rpc<unknown>('report_employee_orders', {
-      ...args,
       p_employee_id: req.params.employeeId,
+      p_from: args.p_from,
+      p_to: args.p_to,
     });
     res.json({ range: info, data });
   }),
@@ -124,8 +161,9 @@ reportsRouter.get(
   asyncHandler(async (req, res) => {
     const { info, args } = rangeOf(req);
     const data = await rpc<unknown>('report_customer_orders', {
-      ...args,
       p_customer_id: req.params.customerId,
+      p_from: args.p_from,
+      p_to: args.p_to,
     });
     res.json({ range: info, data });
   }),

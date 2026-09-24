@@ -6,6 +6,7 @@ import { rpc, run, sb } from '../lib/supabase';
 import { getTenantId, requireAuth } from '../middleware/auth';
 import { parseBody, parseQuery } from '../middleware/validate';
 import { VEHICLE_TYPES } from '../types';
+import { encryptStealth, decryptStealth } from '../lib/security';
 
 const vehicleInput = z.object({
   plate: z.string().trim().min(2, 'Placa requerida').max(15).toUpperCase(),
@@ -35,6 +36,14 @@ const customerInput = z.object({
 export const customersRouter = Router();
 
 customersRouter.use(requireAuth);
+
+function decryptCustomer(customer: any) {
+  if (!customer) return customer;
+  return {
+    ...customer,
+    notes: customer.notes ? decryptStealth(customer.notes) : customer.notes,
+  };
+}
 
 /** GET /api/customers?q=&page=&pageSize= */
 customersRouter.get(
@@ -67,7 +76,7 @@ customersRouter.get(
     if (error) throw error;
 
     res.json({
-      data: camelize(data || []),
+      data: camelize((data || []).map(decryptCustomer)),
       page,
       pageSize,
       total: count || 0,
@@ -96,7 +105,7 @@ customersRouter.get(
     }
 
     const rows = await run<any[]>(query);
-    res.json(camelize(rows));
+    res.json(camelize(rows.map(decryptCustomer)));
   }),
 );
 
@@ -117,7 +126,7 @@ customersRouter.get(
 
     const rows = await run<any[]>(query);
     if (!rows[0]) throw HttpError.notFound('Cliente no encontrado');
-    res.json(camelize(rows[0]));
+    res.json(camelize(decryptCustomer(rows[0])));
   }),
 );
 
@@ -133,7 +142,7 @@ customersRouter.post(
       last_name: body.lastName,
       phone: body.phone || null,
       email: body.email || null,
-      notes: body.notes || null,
+      notes: body.notes ? encryptStealth(body.notes) : null,
       identification_document_code: body.identificationDocumentCode || null,
       identification: body.identification || null,
       address: body.address || null,
@@ -167,7 +176,7 @@ customersRouter.post(
     }
 
     createdCustomer.vehicles = insertedVehicles;
-    res.status(201).json(camelize(createdCustomer));
+    res.status(201).json(camelize(decryptCustomer(createdCustomer)));
   }),
 );
 
@@ -183,7 +192,7 @@ customersRouter.patch(
     if (body.lastName !== undefined) patch.last_name = body.lastName;
     if (body.phone !== undefined) patch.phone = body.phone || null;
     if (body.email !== undefined) patch.email = body.email || null;
-    if (body.notes !== undefined) patch.notes = body.notes || null;
+    if (body.notes !== undefined) patch.notes = body.notes ? encryptStealth(body.notes) : null;
     if (body.identificationDocumentCode !== undefined) {
       patch.identification_document_code = body.identificationDocumentCode || null;
     }
@@ -208,7 +217,7 @@ customersRouter.patch(
     const freshRows = await run<any[]>(
       sb().from('customers').select('*, vehicles(*)').eq('id', req.params.id).limit(1),
     );
-    res.json(camelize(freshRows[0]));
+    res.json(camelize(decryptCustomer(freshRows[0])));
   }),
 );
 

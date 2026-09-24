@@ -35,7 +35,7 @@ function readToken(req: Request): string | null {
 }
 
 /** Exige un JWT válido. */
-export const requireAuth: RequestHandler = (req, _res, next) => {
+export const requireAuth: RequestHandler = async (req, _res, next) => {
   const token = readToken(req);
   if (!token) return next(HttpError.unauthorized('Falta el token de acceso'));
 
@@ -49,6 +49,21 @@ export const requireAuth: RequestHandler = (req, _res, next) => {
       employeeId: payload.employeeId ?? null,
       businessId: payload.businessId ?? null,
     };
+
+    if (req.user.role === 'OPERATOR' && !req.user.employeeId) {
+      try {
+        const { sb, run } = await import('../lib/supabase');
+        const empRows = await run<any[]>(
+          sb().from('employees').select('id').eq('user_id', payload.sub).limit(1),
+        );
+        if (empRows[0]?.id) {
+          req.user.employeeId = empRows[0].id;
+        }
+      } catch {
+        // Fallback silencioso
+      }
+    }
+
     next();
   } catch {
     next(HttpError.unauthorized('Token inválido o expirado'));

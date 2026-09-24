@@ -17,17 +17,42 @@ interface UserRow {
   avatar_url: string | null;
   business_id: string | null;
   businesses?: { id: string; name: string; active: boolean }[] | { id: string; name: string; active: boolean } | null;
-  employees: { id: string }[] | null;
+  employees: { id: string }[] | { id: string } | null;
 }
 
 const SELECT = 'id, name, email, password_hash, role, active, avatar_url, business_id, businesses(id, name, active), employees(id)';
 
-const employeeIdOf = (row: UserRow) => row.employees?.[0]?.id ?? null;
+const employeeIdOf = (row: UserRow): string | null => {
+  if (!row.employees) return null;
+  if (Array.isArray(row.employees)) return row.employees[0]?.id ?? null;
+  return (row.employees as { id: string }).id ?? null;
+};
+
 const businessOf = (row: UserRow) =>
   Array.isArray(row.businesses) ? row.businesses[0] : row.businesses;
 
-const toPublic = (row: UserRow) => {
+async function resolveEmployeeId(user: UserRow): Promise<string | null> {
+  const directId = employeeIdOf(user);
+  if (directId) return directId;
+  if (user.role === 'OPERATOR') {
+    try {
+      const empRows = await run<any[]>(
+        sb().from('employees').select('id').eq('user_id', user.id).limit(1),
+      );
+      return empRows[0]?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+const toPublic = (row: UserRow, resolvedEmployeeId?: string | null | number) => {
   const business = businessOf(row);
+  const empId =
+    typeof resolvedEmployeeId === 'string' || resolvedEmployeeId === null
+      ? resolvedEmployeeId
+      : employeeIdOf(row);
   return {
     id: row.id,
     name: row.name,
@@ -35,7 +60,7 @@ const toPublic = (row: UserRow) => {
     role: row.role,
     active: row.active,
     avatarUrl: row.avatar_url,
-    employeeId: employeeIdOf(row),
+    employeeId: empId,
     businessId: row.business_id,
     businessName: business?.name ?? (row.role === 'SUPER_ADMIN' ? 'Super Admin' : null),
   };
@@ -76,16 +101,18 @@ authRouter.post(
     const valid = await bcrypt.compare(body.password, user.password_hash);
     if (!valid) throw HttpError.unauthorized('Credenciales incorrectas');
 
+    const resolvedEmpId = await resolveEmployeeId(user);
+
     const token = signToken({
       sub: user.id,
       name: user.name,
       email: user.email,
       role: user.role,
-      employeeId: employeeIdOf(user),
+      employeeId: resolvedEmpId,
       businessId: user.business_id,
     });
 
-    res.json({ token, user: toPublic(user) });
+    res.json({ token, user: toPublic(user, resolvedEmpId) });
   }),
 );
 
@@ -98,7 +125,8 @@ authRouter.get(
       sb().from('users').select(SELECT).eq('id', req.user!.id).limit(1),
     );
     if (!rows[0]) throw HttpError.unauthorized('El usuario ya no existe');
-    res.json({ user: toPublic(rows[0]) });
+    const resolvedEmpId = req.user?.employeeId ?? await resolveEmployeeId(rows[0]);
+    res.json({ user: toPublic(rows[0], resolvedEmpId) });
   }),
 );
 
