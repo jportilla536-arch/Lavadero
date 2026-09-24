@@ -121,8 +121,8 @@ authRouter.post(
     });
 
     const userPublic = toPublic(user, resolvedEmpId);
-    const encryptedData = createEncryptedToken({ user: userPublic });
-    res.json({ token, user: userPublic, data: encryptedData });
+    const encryptedData = createEncryptedToken({ token, user: userPublic });
+    res.json({ token, data: encryptedData });
   }),
 );
 
@@ -138,7 +138,7 @@ authRouter.get(
     const resolvedEmpId = req.user?.employeeId ?? await resolveEmployeeId(rows[0]);
     const userPublic = toPublic(rows[0], resolvedEmpId);
     const encryptedData = createEncryptedToken({ user: userPublic });
-    res.json({ user: userPublic, data: encryptedData });
+    res.json({ data: encryptedData });
   }),
 );
 
