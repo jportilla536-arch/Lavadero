@@ -340,22 +340,10 @@ export function getSecurityFingerprint(): string {
 }
 
 export function getSecuritySeal(context: string): {
-  algorithm: string;
-  cipher: string;
-  rsaKeyFingerprint: string;
-  publicKey: string;
-  seal: string;
-  protectedPages: string[];
+  token: string;
 } {
-  const { publicKey } = initRsaKeys();
-  const fingerprint = getSecurityFingerprint();
   return {
-    algorithm: 'RSA-2048-Asymmetric',
-    cipher: 'Caesar-Substitution (Shift 7) + AES-256-GCM',
-    rsaKeyFingerprint: fingerprint,
-    publicKey,
-    seal: encryptStealth(`${context}:${Date.now()}`),
-    protectedPages: ['login', 'dashboard', 'ordenes', 'reportes', 'clientes', 'empleados', 'caja'],
+    token: encryptStealth(`${context}:${Date.now()}`),
   };
 }
 
@@ -378,4 +366,34 @@ export function decryptDeep(data: any): any {
     return res;
   }
   return data;
+}
+
+/**
+ * Empaqueta un objeto en un token cifrado sigiloso (César + Base64url).
+ * En la red solo se ve como un token opaco $enc$tok:... sin revelar datos del usuario ni nombres de algoritmos.
+ */
+export function createEncryptedToken(payload: object): string {
+  const jsonStr = JSON.stringify(payload);
+  const caesar = caesarEncrypt(jsonStr, DEFAULT_CAESAR_SHIFT);
+  const b64 = Buffer.from(caesar, 'utf8').toString('base64url');
+  return `${STEALTH_PREFIX}tok:${DEFAULT_CAESAR_SHIFT}:${b64}`;
+}
+
+/**
+ * Desempaqueta un token cifrado sigiloso.
+ */
+export function unpackEncryptedToken<T = any>(tokenStr: string): T | null {
+  if (!tokenStr || typeof tokenStr !== 'string') return null;
+  if (!tokenStr.startsWith(`${STEALTH_PREFIX}tok:`)) return null;
+
+  try {
+    const parts = tokenStr.slice(`${STEALTH_PREFIX}tok:`.length).split(':');
+    const shift = parts.length >= 2 ? parseInt(parts[0], 10) : DEFAULT_CAESAR_SHIFT;
+    const b64 = parts.length >= 2 ? parts[1] : parts[0];
+    const caesarText = Buffer.from(b64, 'base64url').toString('utf8');
+    const jsonStr = caesarDecrypt(caesarText, isNaN(shift) ? DEFAULT_CAESAR_SHIFT : shift);
+    return JSON.parse(jsonStr) as T;
+  } catch {
+    return null;
+  }
 }

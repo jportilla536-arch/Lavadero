@@ -22,11 +22,6 @@ export const securityRouter = Router();
 securityRouter.get('/public-key', (_req, res) => {
   res.json({
     publicKey: getRsaPublicKey(),
-    fingerprint: getSecurityFingerprint(),
-    algorithm: 'RSA-2048-Asymmetric',
-    cipher: 'Caesar-Substitution (Shift 7) + AES-256-GCM',
-    format: 'SPKI-PEM',
-    protectedPages: ['login', 'dashboard', 'ordenes', 'reportes', 'clientes', 'empleados', 'caja'],
   });
 });
 
@@ -37,9 +32,6 @@ securityRouter.get('/public-key', (_req, res) => {
 securityRouter.get('/info', (_req, res) => {
   res.json({
     active: true,
-    asymmetric: 'RSA 2048-bit PKCS#1 OAEP SHA-256',
-    symmetricPreCipher: 'César Shift (Shift 7) + AES-256-GCM',
-    rsaFingerprint: getSecurityFingerprint(),
     status: 'OPERATIONAL',
   });
 });

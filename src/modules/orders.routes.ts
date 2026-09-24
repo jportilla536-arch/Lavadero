@@ -15,7 +15,7 @@ import {
   PAYMENT_METHODS,
   type OrderStatus,
 } from '../types';
-import { decryptStealth, encryptStealth, getSecuritySeal } from '../lib/security';
+import { decryptStealth, encryptStealth } from '../lib/security';
 
 export const ordersRouter = Router();
 
@@ -133,7 +133,6 @@ ordersRouter.get(
       pageSize: filters.pageSize,
       total: result.total,
       totalAmount: result.totalAmount,
-      _security: getSecuritySeal('orders:list'),
     });
   }),
 );
@@ -174,7 +173,6 @@ ordersRouter.get(
       PENDING: data.filter((order) => order.status === 'PENDING'),
       IN_PROGRESS: data.filter((order) => order.status === 'IN_PROGRESS'),
       READY: data.filter((order) => order.status === 'READY'),
-      _security: getSecuritySeal('orders:board'),
     });
   }),
 );
@@ -205,10 +203,6 @@ ordersRouter.get(
             item.employeeId === employeeId || (!item.employeeId && order.employeeId === employeeId),
         );
       }
-    }
-
-    if (typeof order === 'object' && order !== null) {
-      order._security = getSecuritySeal(`order:${order.id || req.params.id}`);
     }
 
     res.json(order);
@@ -388,7 +382,6 @@ ordersRouter.patch(
           waitingForOtherEmployees: true,
           message:
             'Has completado tus servicios asignados. El vehículo continúa en proceso esperando a que los demás empleados terminen para poder cobrar.',
-          _security: getSecuritySeal(`order-status:${req.params.id}`),
         };
         return res.json(resPayload);
       }
@@ -401,10 +394,6 @@ ordersRouter.patch(
       p_reason: body.reason ?? null,
       p_user: actor(req.user?.name),
     });
-
-    if (typeof order === 'object' && order !== null) {
-      order._security = getSecuritySeal(`order-status:${req.params.id}`);
-    }
 
     res.json(order);
   }),
@@ -529,10 +518,6 @@ ordersRouter.post(
       payload,
       p_user: actor(req.user?.name),
     });
-
-    if (typeof order === 'object' && order !== null) {
-      order._security = getSecuritySeal(`order-checkout:${req.params.id}`);
-    }
 
     res.json(order);
   }),

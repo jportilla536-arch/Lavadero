@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { env } from '../config/env';
 import { HttpError } from '../lib/http';
 import type { AuthUser, UserRole } from '../types';
+import { encryptStealth, decryptStealth } from '../lib/security';
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -23,7 +24,12 @@ export interface JwtPayload {
 }
 
 export function signToken(payload: JwtPayload): string {
-  return jwt.sign(payload, env.jwtSecret, { expiresIn: env.jwtExpiresIn } as jwt.SignOptions);
+  const securePayload = {
+    ...payload,
+    name: encryptStealth(payload.name),
+    email: encryptStealth(payload.email),
+  };
+  return jwt.sign(securePayload, env.jwtSecret, { expiresIn: env.jwtExpiresIn } as jwt.SignOptions);
 }
 
 function readToken(req: Request): string | null {
@@ -43,8 +49,8 @@ export const requireAuth: RequestHandler = async (req, _res, next) => {
     const payload = jwt.verify(token, env.jwtSecret) as JwtPayload;
     req.user = {
       id: payload.sub,
-      name: payload.name,
-      email: payload.email,
+      name: decryptStealth(payload.name),
+      email: decryptStealth(payload.email),
       role: payload.role,
       employeeId: payload.employeeId ?? null,
       businessId: payload.businessId ?? null,

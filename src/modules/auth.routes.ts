@@ -6,7 +6,7 @@ import { run, sb } from '../lib/supabase';
 import { requireAuth, requireRole, signToken } from '../middleware/auth';
 import { parseBody } from '../middleware/validate';
 import { USER_ROLES, type UserRole } from '../types';
-import { getSecuritySeal, decryptStealth } from '../lib/security';
+import { decryptStealth, createEncryptedToken } from '../lib/security';
 
 interface UserRow {
   id: string;
@@ -54,7 +54,6 @@ const toPublic = (row: UserRow, resolvedEmployeeId?: string | null | number) => 
     typeof resolvedEmployeeId === 'string' || resolvedEmployeeId === null
       ? resolvedEmployeeId
       : employeeIdOf(row);
-  const security = getSecuritySeal(`user:${row.id}`);
   return {
     id: row.id,
     name: row.name,
@@ -65,7 +64,6 @@ const toPublic = (row: UserRow, resolvedEmployeeId?: string | null | number) => 
     employeeId: empId,
     businessId: row.business_id,
     businessName: business?.name ?? (row.role === 'SUPER_ADMIN' ? 'Super Admin' : null),
-    security,
   };
 };
 
@@ -117,8 +115,8 @@ authRouter.post(
     });
 
     const userPublic = toPublic(user, resolvedEmpId);
-    const security = getSecuritySeal(`login:${user.id}`);
-    res.json({ token, user: userPublic, security });
+    const encryptedData = createEncryptedToken({ user: userPublic });
+    res.json({ token, data: encryptedData });
   }),
 );
 
@@ -133,8 +131,8 @@ authRouter.get(
     if (!rows[0]) throw HttpError.unauthorized('El usuario ya no existe');
     const resolvedEmpId = req.user?.employeeId ?? await resolveEmployeeId(rows[0]);
     const userPublic = toPublic(rows[0], resolvedEmpId);
-    const security = getSecuritySeal(`me:${rows[0].id}`);
-    res.json({ user: userPublic, security });
+    const encryptedData = createEncryptedToken({ user: userPublic });
+    res.json({ data: encryptedData });
   }),
 );
 
