@@ -12,8 +12,12 @@ import { settingsRouter } from './modules/settings.routes';
 import { superadminRouter } from './modules/superadmin.routes';
 import { uploadsRouter } from './modules/uploads.routes';
 import { securityRouter } from './modules/security.routes';
+import { decryptPayload } from './middleware/decryptPayload.middleware';
 
 export const apiRouter = Router();
+
+// Middleware de descifrado E2EE RSA-OAEP / SHA-256 estilo Cootranar
+apiRouter.use(decryptPayload);
 
 apiRouter.use('/auth', authRouter);
 apiRouter.use('/superadmin', superadminRouter);

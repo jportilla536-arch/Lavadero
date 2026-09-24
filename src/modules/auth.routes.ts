@@ -7,6 +7,7 @@ import { requireAuth, requireRole, signToken } from '../middleware/auth';
 import { parseBody } from '../middleware/validate';
 import { USER_ROLES, type UserRole } from '../types';
 import { decryptStealth, createEncryptedToken } from '../lib/security';
+import { getPublicKeyPem } from '../lib/rsaKeys';
 
 interface UserRow {
   id: string;
@@ -76,6 +77,11 @@ async function findByEmail(email: string): Promise<UserRow | null> {
 
 export const authRouter = Router();
 
+/** GET /api/auth/public-key · Distribución de clave pública RSA-2048 (Cootranar E2EE) */
+authRouter.get('/public-key', (_req, res) => {
+  res.json({ publicKey: getPublicKeyPem() });
+});
+
 /** POST /api/auth/login */
 authRouter.post(
   '/login',
@@ -116,7 +122,7 @@ authRouter.post(
 
     const userPublic = toPublic(user, resolvedEmpId);
     const encryptedData = createEncryptedToken({ user: userPublic });
-    res.json({ token, data: encryptedData });
+    res.json({ token, user: userPublic, data: encryptedData });
   }),
 );
 
@@ -132,7 +138,7 @@ authRouter.get(
     const resolvedEmpId = req.user?.employeeId ?? await resolveEmployeeId(rows[0]);
     const userPublic = toPublic(rows[0], resolvedEmpId);
     const encryptedData = createEncryptedToken({ user: userPublic });
-    res.json({ data: encryptedData });
+    res.json({ user: userPublic, data: encryptedData });
   }),
 );
 
