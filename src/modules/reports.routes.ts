@@ -1,7 +1,8 @@
 import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/http';
-import { rpc } from '../lib/supabase';
+import { camelize } from '../lib/case';
+import { rpc, run, sb } from '../lib/supabase';
 import { getTenantId, requireAuth } from '../middleware/auth';
 import { parseQuery } from '../middleware/validate';
 import { resolveRange } from '../lib/dates';
@@ -135,7 +136,85 @@ reportsRouter.get(
   }),
 );
 
-rangeReport('/sales', 'report_sales');
+/** GET /api/reports/sales · Ventas, comisiones 50/50 y deducción de gastos/compras a la empresa */
+reportsRouter.get(
+  '/sales',
+  asyncHandler(async (req, res) => {
+    const { info, args, businessId } = rangeOf(req);
+    const data = await rpc<any>('report_sales', args);
+
+    // Consultar gastos y compras del mismo período
+    let expQuery = sb()
+      .from('expenses')
+      .select('id, amount, category, concept, supplier, spent_at, notes')
+      .gte('spent_at', args.p_from)
+      .lte('spent_at', args.p_to)
+      .order('spent_at', { ascending: false });
+
+    if (businessId && req.user?.role !== 'SUPER_ADMIN') {
+      expQuery = expQuery.eq('business_id', businessId);
+    }
+
+    const expRows = (await run<any[]>(expQuery)) || [];
+
+    const totalExpenses = expRows.reduce((acc, row) => acc + Number(row.amount || 0), 0);
+    const suppliesExpenses = expRows
+      .filter((row) => row.category === 'SUPPLIES')
+      .reduce((acc, row) => acc + Number(row.amount || 0), 0);
+    const otherExpenses = totalExpenses - suppliesExpenses;
+
+    const summary = data?.summary || {};
+    const totalSales = Number(summary.total || 0);
+    const tips = Number(summary.tips || 0);
+    const netSales = Math.max(0, totalSales - tips);
+
+    // 50% empresa y 50% empleados (sobre ingresos de servicios)
+    const companyGross = Math.round(netSales * 0.5);
+    const employeeCommission = Math.round(netSales * 0.5);
+
+    // Las compras y gastos de la empresa se descuentan ÚNICAMENTE de los ingresos de la empresa
+    const companyNet = companyGross - totalExpenses;
+
+    // Asegurar que byDay y byVehicleType tengan company/employee totals garantizados
+    const byDay = (data?.byDay || []).map((d: any) => ({
+      ...d,
+      companySales: d.companySales ?? Math.round(Number(d.sales || 0) * 0.5),
+      employeeCommission: d.employeeCommission ?? Math.round(Number(d.sales || 0) * 0.5),
+    }));
+
+    const byVehicleType = (data?.byVehicleType || []).map((v: any) => ({
+      ...v,
+      companyTotal: v.companyTotal ?? Math.round(Number(v.total || 0) * 0.5),
+      commissionTotal: v.commissionTotal ?? Math.round(Number(v.total || 0) * 0.5),
+    }));
+
+    res.json({
+      range: info,
+      ...data,
+      byDay,
+      byVehicleType,
+      summary: {
+        ...summary,
+        total: totalSales,
+        companyGross,
+        employeeCommission,
+        companyTotal: companyGross,
+        commissionTotal: employeeCommission,
+        totalExpenses,
+        suppliesExpenses,
+        otherExpenses,
+        companyNet,
+      },
+      expenses: {
+        total: totalExpenses,
+        supplies: suppliesExpenses,
+        other: otherExpenses,
+        count: expRows.length,
+        items: camelize(expRows),
+      },
+    });
+  }),
+);
 rangeReport('/services', 'report_services');
 rangeReport('/tips', 'report_tips');
 rangeReport('/payment-methods', 'report_payment_methods');
