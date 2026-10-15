@@ -5,7 +5,22 @@
 export const USER_ROLES = ['SUPER_ADMIN', 'ADMIN', 'CASHIER', 'OPERATOR'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
-export const VEHICLE_TYPES = ['CAR', 'PICKUP', 'MOTORCYCLE', 'TRUCK'] as const;
+export const VEHICLE_TYPES = [
+  'CAR',
+  'PICKUP',
+  'MOTORCYCLE',
+  'TAXI',
+  'VAN',
+  'MICROBUS',
+  'AEROBAN',
+  'BUSETA',
+  'BUS',
+  'TRUCK',
+  'VOLQUETA',
+  'TRACTOCAMION',
+  'MOTOCARRO',
+  'OTHER',
+] as const;
 export type VehicleType = (typeof VEHICLE_TYPES)[number];
 
 export const EMPLOYEE_STATUSES = ['ACTIVE', 'INACTIVE'] as const;
