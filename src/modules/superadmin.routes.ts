@@ -7,6 +7,7 @@ import { run, runOne, sb } from '../lib/supabase';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { parseBody, parseQuery } from '../middleware/validate';
 import { USER_ROLES } from '../types';
+import { wipeBusinessData } from '../lib/wipeBusiness';
 
 export const superadminRouter = Router();
 
@@ -260,6 +261,46 @@ superadminRouter.patch(
     if (!updated[0]) throw HttpError.notFound('Establecimiento no encontrado');
 
     res.json(camelize(updated[0]));
+  }),
+);
+
+const wipeEstablishmentSchema = z.object({
+  confirmName: z.string().trim().min(1, 'Debes escribir el nombre de la empresa para confirmar'),
+  wipeCatalog: z.boolean().default(false),
+  wipeEmployees: z.boolean().default(false),
+});
+
+/** POST /api/superadmin/establishments/:id/wipe */
+superadminRouter.post(
+  '/establishments/:id/wipe',
+  asyncHandler(async (req, res) => {
+    const businessId = req.params.id;
+    const body = parseBody(wipeEstablishmentSchema, req);
+
+    // 1. Obtener la empresa
+    const business = await runOne<{ id: string; name: string }>(
+      sb().from('businesses').select('id, name').eq('id', businessId).single(),
+      'Establecimiento no encontrado',
+    );
+
+    // 2. Comprobar que el nombre de confirmación coincida exactamente
+    if (body.confirmName.trim().toLowerCase() !== business.name.trim().toLowerCase()) {
+      throw HttpError.badRequest(
+        `El nombre ingresado ("${body.confirmName}") no coincide con el nombre de la empresa ("${business.name}").`,
+      );
+    }
+
+    // 3. Proceder al vaciado de datos
+    const result = await wipeBusinessData(business.id, {
+      wipeCatalog: body.wipeCatalog,
+      wipeEmployees: body.wipeEmployees,
+    });
+
+    res.json({
+      success: true,
+      message: `Se han eliminado los datos operativos de ${business.name} (${result.deletedOrders} órdenes, ${result.deletedCustomers} clientes).`,
+      result,
+    });
   }),
 );
 

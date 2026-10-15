@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { camelize } from '../lib/case';
-import { asyncHandler } from '../lib/http';
+import { asyncHandler, HttpError } from '../lib/http';
 import { run, sb } from '../lib/supabase';
 import { getTenantId, requireAuth, requireRole } from '../middleware/auth';
 import { parseBody } from '../middleware/validate';
+import { wipeBusinessData } from '../lib/wipeBusiness';
 
 const businessSchema = z.object({
   name: z.string().trim().min(2, 'Nombre requerido').max(120),
@@ -128,4 +129,46 @@ settingsRouter.patch(
     res.json(camelize(updated[0]));
   }),
 );
+
+const wipeBusinessSchema = z.object({
+  confirmName: z.string().trim().min(1, 'Debes escribir el nombre de la empresa para confirmar'),
+  wipeCatalog: z.boolean().default(false),
+  wipeEmployees: z.boolean().default(false),
+});
+
+/** POST /api/settings/wipe-data */
+settingsRouter.post(
+  '/wipe-data',
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  asyncHandler(async (req, res) => {
+    const businessId = getTenantId(req);
+    const body = parseBody(wipeBusinessSchema, req);
+    const business = await getBusiness(businessId);
+
+    const [fullBusiness] = await run<{ id: string; name: string }[]>(
+      sb().from('businesses').select('id, name').eq('id', business.id).limit(1),
+    );
+    if (!fullBusiness) {
+      throw HttpError.notFound('Establecimiento no encontrado');
+    }
+
+    if (body.confirmName.trim().toLowerCase() !== fullBusiness.name.trim().toLowerCase()) {
+      throw HttpError.badRequest(
+        `El nombre ingresado ("${body.confirmName}") no coincide con el nombre de tu empresa ("${fullBusiness.name}").`,
+      );
+    }
+
+    const result = await wipeBusinessData(fullBusiness.id, {
+      wipeCatalog: body.wipeCatalog,
+      wipeEmployees: body.wipeEmployees,
+    });
+
+    res.json({
+      success: true,
+      message: `Se han eliminado los datos operativos de ${fullBusiness.name} (${result.deletedOrders} órdenes, ${result.deletedCustomers} clientes).`,
+      result,
+    });
+  }),
+);
+
 
