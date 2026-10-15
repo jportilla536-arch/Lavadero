@@ -36,6 +36,95 @@ const PAYOUT_TYPE_LABELS: Record<string, string> = {
   OTHER: 'Otro concepto',
 };
 
+function parsePayoutFromExpense(
+  e: any,
+  employeesMap: Record<string, string>,
+): {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  amount: number;
+  payoutType: string;
+  payoutTypeLabel: string;
+  method: string;
+  paidAt: string;
+  periodFrom: string | null;
+  periodTo: string | null;
+  notes: string;
+  expenseId: string;
+} {
+  const notesStr = e.notes || '';
+  let employeeId = e.employee_id || '';
+  let payoutType = 'COMMISSION';
+  let method = 'CASH';
+  let periodFrom: string | null = null;
+  let periodTo: string | null = null;
+  let cleanNotes = notesStr;
+
+  // Extract structured tags like [EmpID: ...|Type: ...|Method: ...|From: ...|To: ...]
+  const bracketMatch = notesStr.match(/^\[(.*?)\]\s*(.*)$/);
+  if (bracketMatch) {
+    const meta = bracketMatch[1];
+    cleanNotes = bracketMatch[2] || '';
+    const parts = meta.split('|');
+    for (const part of parts) {
+      const idx = part.indexOf(':');
+      if (idx > -1) {
+        const k = part.slice(0, idx).trim();
+        const v = part.slice(idx + 1).trim();
+        if (k === 'EmpID') employeeId = v;
+        if (k === 'Type') payoutType = v;
+        if (k === 'Method') method = v;
+        if (k === 'From') periodFrom = v;
+        if (k === 'To') periodTo = v;
+      }
+    }
+  } else if (!employeeId) {
+    const idMatch = notesStr.match(/EmpID:\s*([0-9a-fA-F-]+)/i);
+    if (idMatch) {
+      employeeId = idMatch[1];
+    }
+  }
+
+  // If still no employeeId, check if concept or notes mentions an employee name
+  if (!employeeId) {
+    const hay = `${e.concept || ''} ${notesStr}`.toLowerCase();
+    for (const [id, name] of Object.entries(employeesMap)) {
+      if (name && hay.includes(name.toLowerCase())) {
+        employeeId = id;
+        break;
+      }
+    }
+  }
+
+  // Also check if concept mentions type, e.g. (Adelanto), (Sueldo base), etc.
+  if (payoutType === 'COMMISSION' && e.concept) {
+    for (const [key, label] of Object.entries(PAYOUT_TYPE_LABELS)) {
+      if (e.concept.includes(label) || e.concept.toLowerCase().includes(key.toLowerCase())) {
+        payoutType = key;
+        break;
+      }
+    }
+  }
+
+  const employeeName = employeesMap[employeeId] || 'Empleado';
+
+  return {
+    id: e.id,
+    employeeId,
+    employeeName,
+    amount: Number(e.amount || 0),
+    payoutType,
+    payoutTypeLabel: PAYOUT_TYPE_LABELS[payoutType] || payoutType,
+    method,
+    paidAt: e.spent_at || e.paid_at || e.created_at,
+    periodFrom,
+    periodTo,
+    notes: cleanNotes,
+    expenseId: e.id,
+  };
+}
+
 /**
  * GET /api/employee-payouts/summary
  * Devuelve el resumen financiero por cada empleado:
@@ -60,6 +149,11 @@ employeePayoutsRouter.get(
     if (businessId) empQuery = empQuery.eq('business_id', businessId);
     const employees = await run<any[]>(empQuery);
 
+    const employeesMap: Record<string, string> = {};
+    employees.forEach((emp) => {
+      employeesMap[emp.id] = emp.name;
+    });
+
     // 2. Obtener pagos registrados en el rango
     let payouts: any[] = [];
     try {
@@ -69,9 +163,23 @@ employeePayoutsRouter.get(
         .gte('paid_at', range.from.toISOString())
         .lte('paid_at', range.to.toISOString());
       if (businessId) pQuery = pQuery.eq('business_id', businessId);
-      payouts = await run<any[]>(pQuery);
+      const rows = await run<any[]>(pQuery);
+      payouts = rows.map((r) => ({
+        id: r.id,
+        employeeId: r.employee_id,
+        employeeName: employeesMap[r.employee_id] || 'Empleado',
+        amount: Number(r.amount || 0),
+        payoutType: r.payout_type || 'COMMISSION',
+        payoutTypeLabel: PAYOUT_TYPE_LABELS[r.payout_type] || r.payout_type,
+        method: r.method || 'CASH',
+        paidAt: r.paid_at,
+        periodFrom: r.period_from,
+        periodTo: r.period_to,
+        notes: r.notes || '',
+        expenseId: r.expense_id,
+      }));
     } catch {
-      // Si la tabla employee_payouts no está creada aún en Supabase, consultar expenses (SALARY)
+      // Fallback a expenses con categoría SALARY
       let expQuery = sb()
         .from('expenses')
         .select('*')
@@ -80,15 +188,7 @@ employeePayoutsRouter.get(
         .lte('spent_at', range.to.toISOString());
       if (businessId) expQuery = expQuery.eq('business_id', businessId);
       const expRows = await run<any[]>(expQuery);
-      payouts = expRows.map((e) => ({
-        id: e.id,
-        employee_id: e.employee_id,
-        amount: e.amount,
-        paid_at: e.spent_at,
-        notes: e.notes,
-        payout_type: 'COMMISSION',
-        method: 'CASH',
-      }));
+      payouts = expRows.map((e) => parsePayoutFromExpense(e, employeesMap));
     }
 
     // 3. Para cada empleado, calcular lo generado en órdenes finalizadas
@@ -109,7 +209,7 @@ employeePayoutsRouter.get(
         }
 
         const empPayouts = payouts.filter(
-          (p) => p.employee_id === emp.id || (p.notes && p.notes.includes(emp.id)),
+          (p) => p.employeeId === emp.id,
         );
         const totalPaid = empPayouts.reduce((acc, p) => acc + Number(p.amount || 0), 0);
         const totalEarned = Number(earnedData.commissionTotal || 0) + Number(earnedData.tipsTotal || 0);
@@ -183,7 +283,21 @@ employeePayoutsRouter.get(
       if (businessId) query = query.eq('business_id', businessId);
       if (parsed.employeeId) query = query.eq('employee_id', parsed.employeeId);
 
-      payouts = await run<any[]>(query);
+      const rows = await run<any[]>(query);
+      payouts = rows.map((r) => ({
+        id: r.id,
+        employeeId: r.employee_id,
+        employeeName: employeesMap[r.employee_id] || 'Empleado',
+        amount: Number(r.amount || 0),
+        payoutType: r.payout_type || 'COMMISSION',
+        payoutTypeLabel: PAYOUT_TYPE_LABELS[r.payout_type] || r.payout_type,
+        method: r.method || 'CASH',
+        paidAt: r.paid_at,
+        periodFrom: r.period_from,
+        periodTo: r.period_to,
+        notes: r.notes || '',
+        expenseId: r.expense_id,
+      }));
     } catch {
       // Fallback a tabla expenses con categoría SALARY
       let expQuery = sb()
@@ -195,32 +309,20 @@ employeePayoutsRouter.get(
         .order('spent_at', { ascending: false });
 
       if (businessId) expQuery = expQuery.eq('business_id', businessId);
-      if (parsed.employeeId) expQuery = expQuery.eq('employee_id', parsed.employeeId);
 
       const expRows = await run<any[]>(expQuery);
-      payouts = expRows.map((e) => ({
-        id: e.id,
-        employee_id: e.employee_id,
-        amount: e.amount,
-        payout_type: 'COMMISSION',
-        method: 'CASH',
-        paid_at: e.spent_at,
-        notes: e.notes,
-        expense_id: e.id,
-      }));
-    }
+      payouts = expRows.map((e) => parsePayoutFromExpense(e, employeesMap));
 
-    const data = payouts.map((p) => ({
-      ...p,
-      employeeName: employeesMap[p.employee_id] ?? 'Empleado',
-      payoutTypeLabel: PAYOUT_TYPE_LABELS[p.payout_type] ?? p.payout_type,
-    }));
+      if (parsed.employeeId) {
+        payouts = payouts.filter((p) => p.employeeId === parsed.employeeId);
+      }
+    }
 
     res.json({
       range: { from: range.from, to: range.to, preset: range.preset },
       total: payouts.reduce((acc, p) => acc + Number(p.amount || 0), 0),
       count: payouts.length,
-      data: camelize(data),
+      data: camelize(payouts),
     });
   }),
 );
@@ -249,30 +351,14 @@ employeePayoutsRouter.post(
     const paidAtIso = body.paidAt ? new Date(body.paidAt).toISOString() : new Date().toISOString();
     const typeLabel = PAYOUT_TYPE_LABELS[body.payoutType] ?? body.payoutType;
 
-    // 1. Si descuenta de caja, registrar gasto en public.expenses
+    // Etiqueta estructurada para guardar en expenses
+    const metaTag = `[EmpID: ${body.employeeId}|Type: ${body.payoutType}|Method: ${body.method}|DeductCash: ${body.deductFromCash ? '1' : '0'}${body.periodFrom ? `|From: ${body.periodFrom}` : ''}${body.periodTo ? `|To: ${body.periodTo}` : ''}]`;
+    const fullNotes = body.notes ? `${metaTag} ${body.notes}` : `${metaTag} Pago de liquidación / comisión`;
+
     let expenseId: string | null = null;
-    if (body.deductFromCash) {
-      try {
-        const expRow: Record<string, unknown> = {
-          concept: `Pago a empleado: ${empName} (${typeLabel})`,
-          category: 'SALARY',
-          amount: body.amount,
-          notes: body.notes ? `[EmpID: ${body.employeeId}] ${body.notes}` : `[EmpID: ${body.employeeId}] Pago de liquidación / comisión`,
-          spent_at: paidAtIso,
-        };
-        if (businessId) expRow.business_id = businessId;
-
-        const createdExp = await run<any[]>(
-          sb().from('expenses').insert(expRow).select('id'),
-        );
-        expenseId = createdExp[0]?.id ?? null;
-      } catch (err) {
-        console.error('Error registrando gasto en caja para pago de empleado:', err);
-      }
-    }
-
-    // 2. Insertar en employee_payouts
     let payoutRecord: any = null;
+
+    // 1. Intentar registrar primero en employee_payouts si la tabla existe
     try {
       const payoutRow: Record<string, unknown> = {
         employee_id: body.employeeId,
@@ -283,7 +369,6 @@ employeePayoutsRouter.post(
         period_from: body.periodFrom ? new Date(body.periodFrom).toISOString() : null,
         period_to: body.periodTo ? new Date(body.periodTo).toISOString() : null,
         notes: body.notes || null,
-        expense_id: expenseId,
       };
       if (businessId) payoutRow.business_id = businessId;
 
@@ -292,16 +377,49 @@ employeePayoutsRouter.post(
       );
       payoutRecord = created[0];
     } catch {
-      // Fallback si la tabla employee_payouts aún no existe en Supabase
+      // Si la tabla employee_payouts no existe en la BD
+    }
+
+    // 2. Si descuenta de caja O si employee_payouts no existe (para asegurar persistencia)
+    if (body.deductFromCash || !payoutRecord) {
+      try {
+        const expRow: Record<string, unknown> = {
+          concept: `Pago a empleado: ${empName} (${typeLabel})`,
+          category: 'SALARY',
+          amount: body.amount,
+          notes: fullNotes,
+          spent_at: paidAtIso,
+        };
+        if (businessId) expRow.business_id = businessId;
+
+        const createdExp = await run<any[]>(
+          sb().from('expenses').insert(expRow).select('id'),
+        );
+        expenseId = createdExp[0]?.id ?? null;
+
+        // Si tenemos registro en employee_payouts, vincularle el expense_id
+        if (payoutRecord && expenseId) {
+          try {
+            await run(
+              sb().from('employee_payouts').update({ expense_id: expenseId }).eq('id', payoutRecord.id),
+            );
+          } catch {}
+        }
+      } catch (err) {
+        console.error('Error registrando gasto en caja para pago de empleado:', err);
+      }
+    }
+
+    if (!payoutRecord) {
       payoutRecord = {
         id: expenseId || `temp-${Date.now()}`,
-        employee_id: body.employeeId,
+        employeeId: body.employeeId,
         amount: body.amount,
-        payout_type: body.payoutType,
+        payoutType: body.payoutType,
         method: body.method,
-        paid_at: paidAtIso,
-        notes: body.notes,
-        expense_id: expenseId,
+        paidAt: paidAtIso,
+        notes: body.notes || '',
+        expenseId,
       };
     }
 
@@ -325,24 +443,30 @@ employeePayoutsRouter.delete(
     const businessId = getTenantId(req);
     const { id } = req.params;
 
-    // Buscar si tiene expense_id asociado
+    // Buscar si tiene expense_id asociado en employee_payouts
     let expenseId: string | null = null;
+    let deletedFromPayouts = false;
     try {
       let query = sb().from('employee_payouts').select('expense_id').eq('id', id);
       if (businessId) query = query.eq('business_id', businessId);
       const rows = await run<any[]>(query);
-      expenseId = rows[0]?.expense_id ?? null;
-
-      // Eliminar de employee_payouts
-      let delQuery = sb().from('employee_payouts').delete().eq('id', id);
-      if (businessId) delQuery = delQuery.eq('business_id', businessId);
-      await run(delQuery);
+      if (rows && rows.length > 0) {
+        expenseId = rows[0]?.expense_id ?? null;
+        let delQuery = sb().from('employee_payouts').delete().eq('id', id);
+        if (businessId) delQuery = delQuery.eq('business_id', businessId);
+        await run(delQuery);
+        deletedFromPayouts = true;
+      }
     } catch {
-      // Si el id era directamente de expenses
+      // Ignorar si employee_payouts no existe
+    }
+
+    // Si no se eliminó de employee_payouts, entonces el id es directamente de expenses
+    if (!deletedFromPayouts) {
       expenseId = id;
     }
 
-    // Si tiene gasto en caja, eliminarlo para devolver el balance
+    // Si tiene gasto en caja asociado o id es de expenses, eliminarlo para devolver el balance
     if (expenseId) {
       try {
         let delExp = sb().from('expenses').delete().eq('id', expenseId);
