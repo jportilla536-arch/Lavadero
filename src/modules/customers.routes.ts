@@ -9,12 +9,13 @@ import { VEHICLE_TYPES } from '../types';
 import { encryptStealth, decryptStealth } from '../lib/security';
 
 const vehicleInput = z.object({
+  id: z.string().uuid().optional(),
   plate: z.string().trim().min(2, 'Placa requerida').max(15).toUpperCase(),
   brand: z.string().trim().max(60).nullable().optional(),
   model: z.string().trim().max(60).nullable().optional(),
   color: z.string().trim().max(40).nullable().optional(),
   type: z.enum(VEHICLE_TYPES).default('CAR'),
-  photoUrl: z.string().url().nullable().optional(),
+  photoUrl: z.string().url().nullable().optional().or(z.literal('')),
   notes: z.string().trim().max(500).nullable().optional(),
 });
 
@@ -185,7 +186,7 @@ customersRouter.patch(
   '/:id',
   asyncHandler(async (req, res) => {
     const businessId = getTenantId(req);
-    const body = parseBody(customerInput.partial().omit({ vehicles: true }), req);
+    const body = parseBody(customerInput.partial(), req);
 
     const patch: Record<string, unknown> = {};
     if (body.firstName !== undefined) patch.first_name = body.firstName;
@@ -204,19 +205,63 @@ customersRouter.patch(
     }
     if (body.tributeCode !== undefined) patch.tribute_code = body.tributeCode || null;
 
-    if (Object.keys(patch).length === 0) throw HttpError.badRequest('No hay cambios que aplicar');
-
-    let query = sb().from('customers').update(patch).eq('id', req.params.id);
-    if (businessId && req.user?.role !== 'SUPER_ADMIN') {
-      query = query.eq('business_id', businessId);
+    if (Object.keys(patch).length === 0 && body.vehicles === undefined) {
+      throw HttpError.badRequest('No hay cambios que aplicar');
     }
 
-    const updated = await run<unknown[]>(query.select('id'));
-    if (!updated[0]) throw HttpError.notFound('Cliente no encontrado');
+    if (Object.keys(patch).length > 0) {
+      let query = sb().from('customers').update(patch).eq('id', req.params.id);
+      if (businessId && req.user?.role !== 'SUPER_ADMIN') {
+        query = query.eq('business_id', businessId);
+      }
+
+      const updated = await run<unknown[]>(query.select('id'));
+      if (!updated[0]) throw HttpError.notFound('Cliente no encontrado');
+    }
+
+    if (body.vehicles !== undefined) {
+      for (const vehicle of body.vehicles) {
+        if (vehicle.id) {
+          await run(
+            sb()
+              .from('vehicles')
+              .update({
+                plate: vehicle.plate,
+                brand: vehicle.brand || null,
+                model: vehicle.model || null,
+                color: vehicle.color || null,
+                type: vehicle.type,
+                photo_url: vehicle.photoUrl || null,
+                notes: vehicle.notes || null,
+              })
+              .eq('id', vehicle.id)
+              .eq('customer_id', req.params.id)
+              .select('id'),
+          );
+        } else {
+          await run(
+            sb()
+              .from('vehicles')
+              .insert({
+                customer_id: req.params.id,
+                plate: vehicle.plate,
+                brand: vehicle.brand || null,
+                model: vehicle.model || null,
+                color: vehicle.color || null,
+                type: vehicle.type,
+                photo_url: vehicle.photoUrl || null,
+                notes: vehicle.notes || null,
+              })
+              .select('id'),
+          );
+        }
+      }
+    }
 
     const freshRows = await run<any[]>(
       sb().from('customers').select('*, vehicles(*)').eq('id', req.params.id).limit(1),
     );
+    if (!freshRows[0]) throw HttpError.notFound('Cliente no encontrado');
     res.json(camelize(decryptCustomer(freshRows[0])));
   }),
 );
