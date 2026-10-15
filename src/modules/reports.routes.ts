@@ -136,6 +136,23 @@ reportsRouter.get(
   }),
 );
 
+function extractMetaFromNotes(notes: string | null) {
+  if (!notes) return { supplier: null, quantity: null, cleanNotes: null };
+  let supplier: string | null = null;
+  let quantity: string | null = null;
+  const match = notes.match(/^\[(.*?)\]\s*(.*)$/);
+  if (match) {
+    const metaStr = match[1];
+    const clean = match[2] || null;
+    const qMatch = metaStr.match(/Cant:\s*([^|]+)/);
+    if (qMatch) quantity = qMatch[1].trim();
+    const pMatch = metaStr.match(/Prov:\s*([^|]+)/);
+    if (pMatch) supplier = pMatch[1].trim();
+    return { supplier, quantity, cleanNotes: clean };
+  }
+  return { supplier: null, quantity: null, cleanNotes: notes };
+}
+
 /** GET /api/reports/sales · Ventas, comisiones 50/50 y deducción de gastos/compras a la empresa */
 reportsRouter.get(
   '/sales',
@@ -143,10 +160,10 @@ reportsRouter.get(
     const { info, args, businessId } = rangeOf(req);
     const data = await rpc<any>('report_sales', args);
 
-    // Consultar gastos y compras del mismo período
+    // Consultar gastos y compras del mismo período usando select('*') para máxima compatibilidad
     let expQuery = sb()
       .from('expenses')
-      .select('id, amount, category, concept, supplier, spent_at, notes')
+      .select('*')
       .gte('spent_at', args.p_from)
       .lte('spent_at', args.p_to)
       .order('spent_at', { ascending: false });
@@ -157,8 +174,18 @@ reportsRouter.get(
 
     const expRows = (await run<any[]>(expQuery)) || [];
 
-    const totalExpenses = expRows.reduce((acc, row) => acc + Number(row.amount || 0), 0);
-    const suppliesExpenses = expRows
+    const mappedExpenses = expRows.map((row) => {
+      const meta = extractMetaFromNotes(row.notes);
+      return {
+        ...row,
+        supplier: row.supplier || meta.supplier,
+        quantity: row.quantity || meta.quantity,
+        notes: meta.cleanNotes ?? row.notes,
+      };
+    });
+
+    const totalExpenses = mappedExpenses.reduce((acc, row) => acc + Number(row.amount || 0), 0);
+    const suppliesExpenses = mappedExpenses
       .filter((row) => row.category === 'SUPPLIES')
       .reduce((acc, row) => acc + Number(row.amount || 0), 0);
     const otherExpenses = totalExpenses - suppliesExpenses;
@@ -209,8 +236,8 @@ reportsRouter.get(
         total: totalExpenses,
         supplies: suppliesExpenses,
         other: otherExpenses,
-        count: expRows.length,
-        items: camelize(expRows),
+        count: mappedExpenses.length,
+        items: camelize(mappedExpenses),
       },
     });
   }),
