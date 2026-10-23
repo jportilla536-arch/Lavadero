@@ -106,8 +106,12 @@ export class FormlyClient {
         );
       }
       const msg = error instanceof Error ? error.message : 'Error al conectar con Formly Engine';
+      const isLocalhost = root.includes('localhost') || root.includes('127.0.0.1');
+      const hint = isLocalhost
+        ? ' (Nota: Si tu aplicación está en Render o la nube, localhost se refiere al servidor de Render y no a tu PC local. Configura la URL pública de Formly en Configuración -> Formly o prueba en tu entorno local).'
+        : '';
       throw new FormlyError(
-        `No fue posible conectar con Formly en ${root}: ${msg}`,
+        `No fue posible conectar con Formly en ${root}: ${msg}${hint}`,
         502,
         'CONNECTION_FAILED',
       );
