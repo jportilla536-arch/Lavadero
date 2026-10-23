@@ -48,6 +48,15 @@ export const env = {
     password: process.env.FACTUS_PASSWORD ?? '',
     timeoutMs: Math.max(Number(process.env.FACTUS_TIMEOUT_MS) || 15000, 1000),
   },
+
+  formly: {
+    enabled: process.env.FORMLY_ENABLED === 'true',
+    baseUrl: (process.env.FORMLY_BASE_URL ?? 'http://localhost:8080/api/v1').replace(/\/+$/, ''),
+    apiKey: process.env.FORMLY_API_KEY ?? '',
+    tenantId: process.env.FORMLY_TENANT_ID ?? '',
+    webhookSecret: process.env.FORMLY_WEBHOOK_SECRET ?? '',
+    timeoutMs: Math.max(Number(process.env.FORMLY_TIMEOUT_MS) || 15000, 1000),
+  },
 };
 
 if (!env.supabase.url || !env.supabase.serviceRoleKey) {

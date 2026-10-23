@@ -16,6 +16,78 @@ import {
   type OrderStatus,
 } from '../types';
 import { decryptStealth, encryptStealth } from '../lib/security';
+import { env } from '../config/env';
+import { FormlyClient } from '../integrations/formly/formly.client';
+import { buildCarWashSurveyPayload } from '../integrations/formly/survey-builder';
+
+async function triggerAutoSurveyIfEnabled(orderId: string, businessId: string | null) {
+  try {
+    const { data: business } = await sb()
+      .from('businesses')
+      .select('id, name, formly_enabled, formly_api_key, formly_base_url, formly_tenant_id, formly_auto_create_survey')
+      .eq('id', businessId || '')
+      .limit(1)
+      .maybeSingle();
+
+    const enabled = Boolean(business?.formly_enabled ?? env.formly.enabled);
+    const autoCreate = Boolean(business?.formly_auto_create_survey ?? true);
+    const apiKey = business?.formly_api_key || env.formly.apiKey;
+
+    if (!enabled || !autoCreate || !apiKey) return;
+
+    const { data: existing } = await sb()
+      .from('order_surveys')
+      .select('id')
+      .eq('order_id', orderId)
+      .limit(1)
+      .maybeSingle();
+
+    if (existing) return;
+
+    const { data: order } = await sb()
+      .from('orders')
+      .select('id, number, customers(first_name, last_name), vehicles(plate, type), order_items(name)')
+      .eq('id', orderId)
+      .maybeSingle();
+
+    if (!order) return;
+
+    const client = new FormlyClient({
+      apiKey,
+      baseUrl: business?.formly_base_url || env.formly.baseUrl,
+      tenantId: business?.formly_tenant_id || env.formly.tenantId,
+    });
+
+    const cust = (order as any).customers || {};
+    const veh = (order as any).vehicles || {};
+    const items = (order as any).order_items || [];
+
+    const survey = await client.createSurvey(
+      buildCarWashSurveyPayload({
+        orderId: order.id,
+        orderNumber: String(order.number || order.id.slice(0, 8)),
+        businessName: business?.name || 'Lavadero',
+        customerName: cust.first_name ? `${cust.first_name} ${cust.last_name || ''}`.trim() : 'Cliente',
+        vehiclePlate: veh.plate || '',
+        vehicleType: veh.type || '',
+        servicesSummary: items.map((i: any) => i.name).join(', '),
+      }),
+    );
+
+    await sb().from('order_surveys').insert({
+      order_id: order.id,
+      business_id: business?.id || null,
+      survey_id: survey.surveyId,
+      title: survey.title,
+      status: survey.status,
+      public_url: survey.publicUrl,
+      share_url: survey.shareUrl,
+      total_responses: 0,
+    });
+  } catch (err) {
+    console.warn('[Formly Auto-Survey] No se pudo generar encuesta automática:', err);
+  }
+}
 
 export const ordersRouter = Router();
 
@@ -394,6 +466,10 @@ ordersRouter.patch(
       p_reason: body.reason ?? null,
       p_user: actor(req.user?.name),
     });
+
+    if (body.status === 'READY' || body.status === 'FINISHED') {
+      triggerAutoSurveyIfEnabled(req.params.id, getTenantId(req)).catch(() => {});
+    }
 
     res.json(order);
   }),

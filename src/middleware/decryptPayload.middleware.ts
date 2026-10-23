@@ -11,6 +11,11 @@ import { descifrarPayload } from '../lib/rsaCrypto';
  * controladores reciban los parámetros originales sin modificar su lógica interna.
  */
 export const decryptPayload: RequestHandler = (req, res, next) => {
+  const url = req.originalUrl || req.url || '';
+  if (url.includes('/formly/webhook') || url.includes('/webhooks')) {
+    return next();
+  }
+
   try {
     if (
       req.body &&

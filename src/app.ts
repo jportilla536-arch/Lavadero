@@ -37,11 +37,22 @@ export function createApp() {
       credentials: true,
     }),
   );
-  app.use(express.json({ limit: '2mb' }));
+  app.use(
+    express.json({
+      limit: '2mb',
+      verify: (req: any, _res, buf) => {
+        req.rawBody = buf;
+      },
+    }),
+  );
   app.use(express.urlencoded({ extended: true }));
 
   // Middleware de Descifrado Transparente de Payloads (RSA-2048 + César)
   app.use((req, _res, next) => {
+    const url = req.originalUrl || req.url || '';
+    if (url.includes('/formly/webhook') || url.includes('/webhooks')) {
+      return next();
+    }
     if (req.body && typeof req.body === 'object') {
       req.body = decryptDeep(req.body);
     }

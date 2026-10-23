@@ -13,6 +13,7 @@ import { settingsRouter } from './modules/settings.routes';
 import { superadminRouter } from './modules/superadmin.routes';
 import { uploadsRouter } from './modules/uploads.routes';
 import { securityRouter } from './modules/security.routes';
+import { formlyRouter } from './modules/formly.routes';
 import { decryptPayload } from './middleware/decryptPayload.middleware';
 import { encryptResponse } from './middleware/encryptResponse.middleware';
 
@@ -37,4 +38,4 @@ apiRouter.use('/reports', reportsRouter);
 apiRouter.use('/settings', settingsRouter);
 apiRouter.use('/uploads', uploadsRouter);
 apiRouter.use('/security', securityRouter);
-
+apiRouter.use('/formly', formlyRouter);

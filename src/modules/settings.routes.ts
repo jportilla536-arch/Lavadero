@@ -34,6 +34,12 @@ const businessSchema = z.object({
     .optional(),
   factusDefaultLegalOrganizationCode: z.enum(['1', '2']).optional(),
   factusDefaultTributeCode: z.string().trim().min(1).max(10).optional(),
+  formlyEnabled: z.boolean().optional(),
+  formlyApiKey: z.string().trim().nullable().optional(),
+  formlyTenantId: z.string().trim().nullable().optional(),
+  formlyWebhookSecret: z.string().trim().nullable().optional(),
+  formlyBaseUrl: z.string().trim().optional(),
+  formlyAutoCreateSurvey: z.boolean().optional(),
 });
 
 type BusinessInput = z.output<typeof businessSchema>;
@@ -92,6 +98,13 @@ function toRow(input: Partial<BusinessInput>) {
   if (input.factusDefaultTributeCode !== undefined) {
     row.factus_default_tribute_code = input.factusDefaultTributeCode;
   }
+  if (input.formlyEnabled !== undefined) row.formly_enabled = input.formlyEnabled;
+  if (input.formlyApiKey !== undefined) row.formly_api_key = input.formlyApiKey || null;
+  if (input.formlyTenantId !== undefined) row.formly_tenant_id = input.formlyTenantId || null;
+  if (input.formlyWebhookSecret !== undefined) row.formly_webhook_secret = input.formlyWebhookSecret || null;
+  if (input.formlyBaseUrl !== undefined) row.formly_base_url = input.formlyBaseUrl || 'http://localhost:8080/api/v1';
+  if (input.formlyAutoCreateSurvey !== undefined) row.formly_auto_create_survey = input.formlyAutoCreateSurvey;
+
   return row;
 }
 
@@ -170,5 +183,3 @@ settingsRouter.post(
     });
   }),
 );
-
-

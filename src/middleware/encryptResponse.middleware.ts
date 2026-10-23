@@ -22,12 +22,14 @@ export const encryptResponse: RequestHandler = (_req, res, next) => {
       return originalJson(body);
     }
 
-    // 2. Excluir endpoints públicos de distribución criptográfica y salud
+    // 2. Excluir endpoints públicos de distribución criptográfica, salud y webhooks B2B
     const url = res.req?.originalUrl || res.req?.url || '';
     if (
       url.includes('/public-key') ||
       url.includes('/security/info') ||
-      url.includes('/health')
+      url.includes('/health') ||
+      url.includes('/formly/webhook') ||
+      url.includes('/webhooks')
     ) {
       return originalJson(body);
     }
