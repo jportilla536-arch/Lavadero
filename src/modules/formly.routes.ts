@@ -11,6 +11,15 @@ import { buildCarWashSurveyPayload } from '../integrations/formly/survey-builder
 import type { FormlyWebhookPayload, SubmitResponsePayload } from '../integrations/formly/types';
 
 export const formlyRouter = Router();
+function toHttpFormlyError(err: unknown): HttpError {
+  if (err instanceof FormlyError) {
+    const status = err.status === 401 ? 422 : err.status;
+    return new HttpError(status, `Error de Formly: ${err.message}`, err.providerDetails);
+  }
+  if (err instanceof HttpError) return err;
+  return new HttpError(500, err instanceof Error ? err.message : 'Error interno de Formly');
+}
+
 
 // =====================================================================
 // Helper: Obtener configuración y cliente de Formly para el negocio actual
@@ -264,10 +273,7 @@ formlyRouter.post(
 
       res.status(201).json(response);
     } catch (err) {
-      if (err instanceof FormlyError) {
-        throw new HttpError(err.status, `Formly error: ${err.message}`, err.providerDetails);
-      }
-      throw err;
+      throw toHttpFormlyError(err);
     }
   }),
 );
@@ -356,10 +362,7 @@ formlyRouter.post(
 
       res.status(201).json(camelize(saved || record));
     } catch (err) {
-      if (err instanceof FormlyError) {
-        throw new HttpError(err.status, `Error de Formly: ${err.message}`, err.providerDetails);
-      }
-      throw err;
+      throw toHttpFormlyError(err);
     }
   }),
 );

@@ -49,8 +49,8 @@ export class FormlyClient {
     const key = apiKeyOverride || this.apiKey;
     if (!key) {
       throw new FormlyError(
-        'Falta la API Key de Formly (fmly_live_...). Configúrala en los ajustes del negocio o en FORMLY_API_KEY.',
-        401,
+        'Falta la API Key de Formly (fmly_live_...). Configúrala en Configuración -> Formly.',
+        422,
         'INVALID_API_KEY',
       );
     }
@@ -74,6 +74,7 @@ export class FormlyClient {
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
+          'Bypass-Tunnel-Reminder': 'true',
           ...init.headers,
         },
       });
@@ -92,7 +93,8 @@ export class FormlyClient {
         const errorMsg =
           body?.message || body?.error || `Formly API respondió HTTP ${response.status}`;
         const errorCode = body?.code || (response.status === 401 ? 'INVALID_API_KEY' : 'API_ERROR');
-        throw new FormlyError(errorMsg, response.status, errorCode, body);
+        const reportStatus = response.status === 401 ? 422 : response.status;
+        throw new FormlyError(errorMsg, reportStatus, errorCode, body);
       }
 
       return body as T;
