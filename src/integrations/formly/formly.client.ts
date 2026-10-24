@@ -154,7 +154,7 @@ export class FormlyClient {
     const headers: Record<string, string> = {
       'X-Formly-Api-Key': key,
     };
-    if (tenantId) {
+    if (tenantId && tenantId !== 't-lavadero-express') {
       headers['X-Tenant-ID'] = tenantId;
     }
 
@@ -221,7 +221,7 @@ export class FormlyClient {
     const headers: Record<string, string> = {
       'X-Formly-Api-Key': key,
     };
-    if (tenantId) {
+    if (tenantId && tenantId !== 't-lavadero-express') {
       headers['X-Tenant-ID'] = tenantId;
     }
 
