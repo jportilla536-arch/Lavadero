@@ -158,12 +158,25 @@ export class FormlyClient {
       headers['X-Tenant-ID'] = tenantId;
     }
 
+    const normalizedQuestions = (payload.questions || []).map((q) => {
+      let t = q.type as string;
+      if (t === 'NPS_SCALE') t = 'NPS';
+      if (t === 'SHORT_ANSWER') t = 'FREE_TEXT';
+      if (t === 'BOOLEAN_YES_NO') t = 'DICHOTOMOUS';
+      return { ...q, type: t as any };
+    });
+
+    const bodyPayload = {
+      ...payload,
+      questions: normalizedQuestions,
+    };
+
     return this.fetchJson<CreateSurveyResponse>(
       '/integrations/external/surveys',
       {
         method: 'POST',
         headers,
-        body: JSON.stringify(payload),
+        body: JSON.stringify(bodyPayload),
       },
       override?.baseUrl,
     );

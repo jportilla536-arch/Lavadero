@@ -49,7 +49,7 @@ export function buildCarWashSurveyPayload(
       },
       {
         title: `¿Qué probabilidad hay de que recomiendes ${business} a un amigo o colega?`,
-        type: 'NPS_SCALE',
+        type: 'NPS',
         required: true,
         config: {
           minValue: 0,

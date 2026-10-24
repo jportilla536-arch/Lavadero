@@ -1,15 +1,20 @@
 export type FormlyQuestionType =
   | 'RATING_STARS'
+  | 'NPS'
   | 'NPS_SCALE'
   | 'SINGLE_CHOICE'
   | 'MULTIPLE_CHOICE'
   | 'DROPDOWN'
   | 'SHORT_ANSWER'
+  | 'FREE_TEXT'
   | 'PARAGRAPH'
   | 'NUMBER'
   | 'DATE'
   | 'TIME'
-  | 'BOOLEAN_YES_NO';
+  | 'BOOLEAN_YES_NO'
+  | 'DICHOTOMOUS'
+  | 'LINEAR_SCALE'
+  | 'LIKERT';
 
 export interface FormlyOption {
   label: string;
@@ -53,9 +58,12 @@ export interface CreateSurveyResponse {
   surveyId: string;
   title: string;
   status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
-  totalQuestions: number;
+  totalQuestions?: number;
+  questionCount?: number;
   publicUrl: string;
-  shareUrl: string;
+  shareUrl?: string;
+  builderUrl?: string;
+  resultsUrl?: string;
   createdAt: string;
 }
 

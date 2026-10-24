@@ -345,7 +345,7 @@ formlyRouter.post(
         title: created.title,
         status: created.status,
         public_url: created.publicUrl,
-        share_url: created.shareUrl,
+        share_url: created.shareUrl || created.publicUrl,
         total_responses: 0,
       };
 
